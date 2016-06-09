@@ -1,0 +1,132 @@
+=head2 Thu Jun  9 09:42:28 2016: C<Module> L<Try::Tiny|Try::Tiny>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.24>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Jun  9 09:42:37 2016: C<Module> L<Test::Fatal|Test::Fatal>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.014>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Jun  9 09:42:51 2016: C<Module> L<Class::Accessor::Lite|Class::Accessor::Lite>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.08>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Jun  9 09:43:01 2016: C<Module> L<boolean|boolean>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.45>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Jun  9 09:43:15 2016: C<Module> L<Exporter::Tiny|Exporter::Tiny>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.042>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Jun  9 09:43:27 2016: C<Module> L<List::MoreUtils|List::MoreUtils>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.415>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
