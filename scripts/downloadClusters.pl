@@ -1,4 +1,7 @@
 #!/usr/bin/env perl 
+#
+# Author: Error Strain
+# Modified: Lee Katz <lkatz@cdc.gov>
 
 use strict;
 use warnings;
