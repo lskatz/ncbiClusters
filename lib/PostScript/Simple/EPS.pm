@@ -461,7 +461,7 @@ sub _getfilebbox
   my $foundbbx = 0;
 
   return 0 if (!defined $$self{file});
-  open EPS, "< $$self{file}" || croak "can't open eps file $$self{file}";
+  open(EPS, "<", $$self{file})or die "can't open eps file $$self{file}: $!";
   SCAN: while (<EPS>)
   {
     s/[\r\n]*$//; #ultimate chomp
@@ -476,6 +476,8 @@ sub _getfilebbox
     }
   }
   close EPS;
+
+  if(!$foundbbx) { die "ERROR: could not parse $$self{file} for boundingbox dimensions"}
 
   return $foundbbx;
 }
@@ -503,6 +505,7 @@ sub _getsourcebbox
     $$self{bby2} = $4; 
     return 1;
   }
+  else { die "ERROR: coudl not parse $ref for boundingbox dimensions"}
 
   return 0;
 }

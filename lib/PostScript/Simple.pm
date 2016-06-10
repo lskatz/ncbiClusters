@@ -1952,6 +1952,8 @@ sub importepsfile
   $opt{'overlap'} = 0 if (!defined($opt{'overlap'}));
   $opt{'stretch'} = 0 if (!defined($opt{'stretch'}));
   
+  use Data::Dumper;
+  #system("pwd; ls -lh $file; head $file");
   $eps = new PostScript::Simple::EPS(file => $file);
   ($bbllx, $bblly, $bburx, $bbury) = $eps->get_bbox();
 
