@@ -12,7 +12,7 @@ use File::Temp qw/tempdir/;
 use Data::Dumper;
 use POSIX qw/strftime/;
 use Time::Piece; # for parsing dates from Metadata.tsv
-use File::Copy qw/mv/;
+use File::Copy qw/mv cp/;
 use List::Util qw/min max/;
 
 # Import local modules
@@ -30,7 +30,7 @@ exit(main());
 
 sub main{
   my $settings={};
-  GetOptions($settings,qw(help report from=s to=s tempdir=s outdir=s set|results|resultsSet=s list maxTrees=i)) or die $!;
+  GetOptions($settings,qw(help new-isolates report from=s to=s tempdir=s outdir=s set|results|resultsSet=s list maxTrees=i)) or die $!;
   $$settings{domain}||="ftp.ncbi.nlm.nih.gov";
   $$settings{tempdir}||=tempdir("$0.XXXXXX",TMPDIR=>1,CLEANUP=>1);
   $$settings{outdir}||="out";
@@ -54,9 +54,9 @@ sub main{
     return 0;
   }
 
-  my $remoteDir=$ARGV[0];
+  $$settings{remoteDir}||=$ARGV[0];
 
-  if(!$remoteDir || $$settings{help}){
+  if(!$$settings{remoteDir} || $$settings{help}){
     die usage($settings);
   }
 
@@ -64,7 +64,7 @@ sub main{
   logmsg "Temporary directory is $$settings{tempdir}";
   logmsg "Downloading for $$settings{set}";
 
-  downloadAll($remoteDir,$settings);
+  downloadAll($$settings{remoteDir},$settings);
   my $metadata=readMetadata($settings);
 
   # Remove older trees and anything else that doesn't
@@ -75,12 +75,18 @@ sub main{
 
   # Move anything over that passed the filter
   mkdir $$settings{outdir};
-  for(glob("$$settings{tempdir}/*.{newick,tsv,pdf}")){
-    mv($_,$$settings{outdir});
+  for(glob("$$settings{tempdir}/*.{tsv,ps,pdf}")){
+    cp($_,$$settings{outdir});
   }
+  # trees
+  mkdir "$$settings{outdir}/trees";
+  for(glob("$$settings{tempdir}/*.{newick}")){
+    cp($_,"$$settings{outdir}/trees/");
+  }
+  # images
   mkdir "$$settings{outdir}/images";
   for(glob("$$settings{tempdir}/*.{eps,gif}")){
-    mv($_,"$$settings{outdir}/images");
+    cp($_,"$$settings{outdir}/images");
   }
 
   return 0;
@@ -134,27 +140,38 @@ sub downloadAll{
     $ftp->get($_,"$$settings{tempdir}/$_")
       or die "get failed", $ftp->message;
   }
+  # Retrieve the list of newest isolates, also in this directory
+  my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv");
+  foreach(@newIsolateFiles){
+    $ftp->get($_,"$$settings{tempdir}/$_")
+      or die "get failed", $ftp->message;
+  }
+  
 
   #Retrieve SNP trees
   logmsg "Retrieving trees";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/SNP_trees/")
     or die "Cannot change working directory ", $ftp->message;
-  my @snpfiles = $ftp->ls();
-  @snpfiles=reverse(@snpfiles);
-  logmsg scalar(@snpfiles)." trees to download";
-  for(my $i=0;$i<@snpfiles;$i++){
-    $ftp->cwd($snpfiles[$i])
-      or die "Cannot change working directory ", $ftp->message;
-    my @newfiles = $ftp->ls("*.newick");
-    $ftp->ascii();
-    $ftp->get($newfiles[0],"$$settings{tempdir}/$newfiles[0]")
-      or die "get failed", $ftp->message;
-    $ftp->cwd("..")
-      or die "Cannot change working directory ", $ftp->message;
-
-    if($i % 10 == 0 && $i>0){
+  $ftp->ascii(); # download ascii encoding
+  my @treefiles = $ftp->ls("*/*.newick");
+  @treefiles=reverse(@treefiles); # assumed reverse order so that we get mostly new trees first
+  logmsg scalar(@treefiles)." trees to download";
+  for(my $i=0;$i<@treefiles;$i++){
+    if($i % 50 == 0 && $i>0){
       logmsg "Finished downloading $i trees";
     }
+
+    my $localfile="$$settings{tempdir}/".basename($treefiles[$i]);
+
+    # Don't download the file if you already have it or
+    # if there wasn't even a tree in that directory (unlikely)
+    if(-e $localfile){
+      logmsg "Found $localfile; skipping";
+      next;
+    }
+    $ftp->get($treefiles[$i],$localfile)
+      or die "get failed", $ftp->message;
+
     if($$settings{maxTrees} && $i >= $$settings{maxTrees}){
       last;
     }
@@ -162,7 +179,7 @@ sub downloadAll{
 
   $ftp->quit;
 
-  return scalar(@snpfiles);
+  return scalar(@treefiles);
 }
 
 sub readMetadata{
@@ -199,6 +216,25 @@ sub readMetadata{
 sub filterTrees{
   my($metadata,$settings)=@_;
 
+  # Index the list of new isolates if requested to 
+  # filter by new isolates
+  my %treeWithNewIsolate;
+  if($$settings{'new-isolates'}){
+    my $newisolatesFile=(glob("$$settings{tempdir}/*.new_isolates.tsv"))[0];
+    open(my $fh,"<",$newisolatesFile) or die "ERROR: cannot read $newisolatesFile: $!";
+    my $header=<$fh>; chomp($header);
+    my @header=split(/\t/,$header);
+    while(<$fh>){
+      chomp;
+      my @F=split(/\t/,$_);
+      my %F;
+      @F{@header}=@F;
+      $treeWithNewIsolate{$F{PDS_acc}}=\%F;
+    }
+    close $fh;
+  }
+
+  # Start the filtering process
   for my $tree(glob("$$settings{tempdir}/*.newick")){
     # Read in the tree and its leaves
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree;
@@ -229,11 +265,21 @@ sub filterTrees{
 
     # Delete the tree if it doesn't occur within the time window.
     if($is_in_timewindow){
-      logmsg "Tree passed: $tree";
+      #logmsg "Tree passed: $tree";
     } else {
-      logmsg "Tree is not in the time window: $tree";
+      #logmsg "Tree is not in the time window: $tree";
       unlink($tree);
     }
+    
+    # Filter for new isolates only if requested
+    if($$settings{'new-isolates'}){
+      my $PDS_acc=basename($tree,".newick_tree.newick");
+      if($treeWithNewIsolate{$PDS_acc}){
+
+      } else {
+        unlink($tree);
+      }
+    }  
 
     # TODO any future filters?
   }
@@ -291,9 +337,12 @@ sub makeReport{
   $p->setcolour("black");
   $p->setfont("Times-Roman",32);
   $p->text({align=>"centre"},72*4,72*10,"Report from NCBI Pathogen Pipeline");
-  $p->text({align=>"centre"},72*4,72*9.5,"generated today"); # TODO fill in the date
-  #$p->setfont("Times-Roman",24);
-  #$p->text(1,7,"Generated by EDLB/CFSAN software");
+  $p->setfont("Times-Roman",24);
+  $p->text({align=>"centre"},72*4,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
+  $p->text({align=>"left"},72*0.5,72*9.0,"Filters: from: $$settings{from}");
+  $p->text({align=>"left"},72*0.5,72*8.5,"Filters: to: $$settings{to}");
+  $p->setfont("Times-Roman",16);
+  $p->text({align=>"centre"},72*4,72*1,"generated ".localtime()); 
 
   # Make a new page per tree
   #$p->setcolour(30,30,30);
@@ -354,30 +403,43 @@ sub makeReport{
       die "ERROR with $eps:\n". $p->err();
     }
   }
-  $p->output("report.ps");
-  logmsg "Wrote $pageNumber pages to report.ps";
+  $p->output("$$settings{tempdir}/report.ps");
+  logmsg "Wrote $pageNumber pages to $$settings{tempdir}/report.ps";
   
+  system("ps2pdf $$settings{tempdir}/report.ps $$settings{tempdir}/report.pdf");
+  if($?){
+    logmsg "WARNING: could not use `ps2pdf` to convert report.ps to report.pdf";
+  } else {
+    logmsg "Converted report.ps to report.pdf";
+  }
 }
 # A hacky way to parse a variety of dates
 sub parseDate{
   my($date,$settings)=@_;
-  if($date=~m|\d{1,2}/\d{1,2}/\d{2,4}|){
-    return Time::Piece->strptime($date,"%m/%d/%Y");
-  } elsif($date=~m|\d{2,4}\-\d{1,2}\-\d{1,2}|){
-    return Time::Piece->strptime($date,"%Y-%m-%d");
-  } else {
 
-    # IF MMYYDD formats don't work, try just the year
-    if($date=~/^\d{4}$/){
-      return Time::Piece->strptime($date,"%Y");
-    } elsif($date=~/^(\d{4})/){ # just try first four digits of a number as a year
-      return Time::Piece->strptime($1,"%Y");
+  # Don't die just because Time::Piece craps out
+  my $timePiece;
+  eval{
+    if($date=~m|\d{1,2}/\d{1,2}/\d{2,4}|){
+      $timePiece=Time::Piece->strptime($date,"%m/%d/%Y");
+    } elsif($date=~m|\d{2,4}\-\d{1,2}\-\d{1,2}|){
+      $timePiece=Time::Piece->strptime($date,"%Y-%m-%d");
+    } else {
+
+      # IF MMYYDD formats don't work, try just the year
+      if($date=~/^\d{4}$/){
+        $timePiece=Time::Piece->strptime($date,"%Y");
+      } elsif($date=~/^(\d{4})/){ # just try first four digits of a number as a year
+        $timePiece=Time::Piece->strptime($1,"%Y");
+      }
+        
     }
-      
-  }
+    return $timePiece;
+  };
+  return $timePiece if(defined $timePiece);
 
   logmsg "WARNING: I could not parse $date for dates. Using 12/31/1969.";
-  return Time::Piece->strptime("%Y-%m-%d","12/31/1969");
+  return Time::Piece->strptime("12/31/1969","%m/%d/%Y");
 }
 
 sub addMetadataToTree{
@@ -387,7 +449,7 @@ sub addMetadataToTree{
     # remove leading and lagging quotes
     my $target_acc=$node->id;
     $target_acc=~s/^\'|\'$//g;
-    logmsg $node->id ." -> $target_acc";
+    #logmsg $node->id ." -> $target_acc";
 
     # rename the node
     $node->id($$metadata{$target_acc}{label});
@@ -403,7 +465,7 @@ sub addMetadataToTree{
       $red=0.9;
       $green=0.3;
     }
-    logmsg "added $red $green $blue to $target_acc";
+    #logmsg "added $red $green $blue to $target_acc";
     $node->add_tag_value("Rcolor",$red);
     $node->add_tag_value("Gcolor",$green);
     $node->add_tag_value("Bcolor",$blue);
@@ -426,7 +488,7 @@ sub usage{
   --resultsSet  Listeria    Which NCBI results set to download
   --list                    List the options for results sets
   --report                  Create a report in outdir/report.pdf
-                            and then exit.
+
   FILTERING
   --from        $from   Include trees with any isolates
                             as early as this date. Dates
@@ -434,6 +496,8 @@ sub usage{
                             YYYY-MM-DD or MM/DD/YYYY
   --to          $to   Include trees with isolates
                             as late as this date.
+  --new-isolates            Only include trees that contain
+                            newly uploaded isolates.
   --maxTrees    0           Download at most this many trees
   "
 }
