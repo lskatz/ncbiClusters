@@ -11,7 +11,6 @@ use File::Basename qw/basename/;
 use File::Temp qw/tempdir/;
 use Data::Dumper;
 use POSIX qw/strftime/;
-use Time::Piece; # for parsing dates from Metadata.tsv
 use File::Copy qw/mv cp/;
 use List::Util qw/min max/;
 
@@ -21,6 +20,7 @@ use lib "$FindBin::RealBin/../lib";
 use Bio::Tree::Draw::Cladogram; # requires PostScript/TextBlock.pm in the lib dir
 use Bio::TreeIO;
 use PostScript::Simple;
+use Time::Piece; # for parsing dates from Metadata.tsv
 #use Docopt;
 
 local $0=basename($0);
@@ -392,11 +392,17 @@ sub makeReport{
     #$p->{direction}="RightUp";
     #$p->{coordorigin} = "LeftBottom";   # coordinate origin bottom-left
 
+    # Make a 0.5 inch margin from the bottom left
     # 72 points per inch.
-    #$_=sprintf("%0.4f",($_/72)) for(@treeCoordinates);
     $_=($_+=72*0.5) for(@treeCoordinates[0,2]); # shift X
     $_=($_+=72*0.5) for(@treeCoordinates[1,3]); # shift Y
-    #@treeCoordinates=(200,200,400,400);
+
+    # Rescale if wider than the page or taller than the page.
+    # Dimensions inside of the margin: 7.5" x 10"
+    if($treeCoordinates[2] > 7.5*72 || $treeCoordinates[3] > 10*72){
+      my $scale=min(7.5*72/$treeCoordinates[2], 10*72/$treeCoordinates[3]);
+      $_ *= $scale for(@treeCoordinates);
+    }
 
     $p->importepsfile($eps, @treeCoordinates);
     if($p->err()){
