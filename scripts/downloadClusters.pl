@@ -342,10 +342,26 @@ sub makeReport{
   $p->text({align=>"left"},72*4,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
   $p->text({align=>"left"},72*0.5,72*9.0,"Filters: from: $$settings{from}");
   $p->text({align=>"left"},72*0.5,72*8.5,"Filters: to: $$settings{to}");
+
+  # Add a color legend
+  $p->setcolour("black");
+  $p->setlinewidth(1);
+  $p->box(72*0.5,72*6,72*7.5,72*8);
+  # First color: env/food
+  $p->setcolour("red");
+  $p->box({filled=>1},72*1,72*6.5,72*1.5,72*7);
+  $p->setcolour("black");
+  $p->text(72*2,72*6.5,"Environmental or Food");
+  # Second color: clinical
+  $p->setcolour("blue");
+  $p->box({filled=>1},72*1,72*7.2,72*1.5,72*7.7);
+  $p->setcolour("black");
+  $p->text(72*2,72*7.2,"Clinical");
+
+  # Footer for time generaged
+  $p->setcolour("black");
   $p->setfont("Times-Roman",16);
   $p->text({align=>"centre"},72*4,72*1,"generated ".localtime()); 
-
-  # TODO make URL to NCBI results directory and eventually the NCBI online Genome Workbench
 
   # Make a new page per tree
   #$p->setcolour(30,30,30);
@@ -357,10 +373,16 @@ sub makeReport{
     $p->setcolour("black");
     logmsg "Writing to $eps";
 
-    $p->text({align=>"centre"},4*72,10*72,basename($eps,".newick_tree.eps"));
+    my $tree_acc=basename($eps,".newick_tree.eps");
+    $p->text({align=>"centre"},4*72,10.5*72,$tree_acc);
     if($p->err()){
       die $p->err();
     }
+
+    # Make URL to NCBI results directory
+    # TODO when possible, switch the URL to the NCBI online Genome Workbench
+    $p->setfont("Times-Roman",16);
+    $p->text({align=>"left"},72*0.5,72*10,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
 
     # Bio::Tree::Draw::Cladogram puts decimals into the width
     # but PostScript::Simple cannot understand decimals.
@@ -425,6 +447,8 @@ sub makeReport{
 # A hacky way to parse a variety of dates
 sub parseDate{
   my($date,$settings)=@_;
+
+  return Time::Piece->strptime("12/31/1969","%m/%d/%Y") if($date=~/^\s*$/);
 
   # Don't die just because Time::Piece craps out
   my $timePiece;
