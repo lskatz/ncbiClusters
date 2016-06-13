@@ -63,31 +63,16 @@ sub main{
   mkdir($$settings{tempdir}) if(!-e $$settings{tempdir});
   logmsg "Temporary directory is $$settings{tempdir}";
   logmsg "Downloading for $$settings{set}";
+  mkdir($$settings{outdir}) if(!-e $$settings{outdir});
 
   downloadAll($$settings{remoteDir},$settings);
   my $metadata=readMetadata($settings);
 
-  # Remove older trees and anything else that doesn't
-  # pass the user-defined filters.
+  # Copies anything that passes the filters to the 
+  # output directory.
   filterTrees($metadata,$settings);
 
   makeReport($metadata,$settings) if($$settings{report});
-
-  # Move anything over that passed the filter
-  mkdir $$settings{outdir};
-  for(glob("$$settings{tempdir}/*.{tsv,ps,pdf}")){
-    cp($_,$$settings{outdir});
-  }
-  # trees
-  mkdir "$$settings{outdir}/trees";
-  for(glob("$$settings{tempdir}/*.{newick}")){
-    cp($_,"$$settings{outdir}/trees/");
-  }
-  # images
-  mkdir "$$settings{outdir}/images";
-  for(glob("$$settings{tempdir}/*.{eps,gif}")){
-    cp($_,"$$settings{outdir}/images");
-  }
 
   return 0;
 }
@@ -123,33 +108,39 @@ sub downloadAll{
 
   #Retrieve the metadata file
   logmsg "Retrieving metadata";
+  mkdir "$$settings{tempdir}/Metadata";
+  mkdir "$$settings{outdir}/Metadata";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Metadata/")
-    or die "Cannot change working directory ", $ftp->message;
+    or die "Cannot change working directory. It is possible that '$$settings{set}' ($remoteDir) does not exist. ", $ftp->message;
   my @metafiles = $ftp->ls("*.tsv");
   foreach(@metafiles) {
-    $ftp->get($_,"$$settings{tempdir}/$_")
+    $ftp->get($_,"$$settings{tempdir}/Metadata/$_")
       or die "get failed", $ftp->message;
   }
 
   #Retrieve SNP distances
   logmsg "Retrieving SNP distances";
+  mkdir "$$settings{tempdir}/Clusters";
+  mkdir "$$settings{outdir}/Clusters";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
     or die "Cannot change working directory ", $ftp->message;
   my @distfiles = $ftp->ls("*.SNP_distances.tsv");
   foreach(@distfiles) {
-    $ftp->get($_,"$$settings{tempdir}/$_")
+    $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
       or die "get failed", $ftp->message;
   }
   # Retrieve the list of newest isolates, also in this directory
   my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv");
   foreach(@newIsolateFiles){
-    $ftp->get($_,"$$settings{tempdir}/$_")
+    $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
       or die "get failed", $ftp->message;
   }
   
 
   #Retrieve SNP trees
   logmsg "Retrieving trees";
+  mkdir "$$settings{tempdir}/SNP_trees";
+  mkdir "$$settings{outdir}/SNP_trees";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/SNP_trees/")
     or die "Cannot change working directory ", $ftp->message;
   $ftp->ascii(); # download ascii encoding
@@ -157,16 +148,16 @@ sub downloadAll{
   @treefiles=reverse(@treefiles); # assumed reverse order so that we get mostly new trees first
   logmsg scalar(@treefiles)." trees to download";
   for(my $i=0;$i<@treefiles;$i++){
-    if($i % 50 == 0 && $i>0){
+    if($i % 100 == 0 && $i>0){
       logmsg "Finished downloading $i trees";
     }
 
-    my $localfile="$$settings{tempdir}/".basename($treefiles[$i]);
+    my $localfile="$$settings{tempdir}/SNP_trees/".basename($treefiles[$i]);
 
     # Don't download the file if you already have it or
     # if there wasn't even a tree in that directory (unlikely)
     if(-e $localfile){
-      logmsg "Found $localfile; skipping";
+      #logmsg "Found $localfile; skipping";
       next;
     }
     $ftp->get($treefiles[$i],$localfile)
@@ -186,11 +177,16 @@ sub readMetadata{
   my($settings)=@_;
 
   # Assume the metadata file is the only one in the temp directory
-  my @metadataFiles=glob("$$settings{tempdir}/*.metadata.tsv");
+  my @metadataFiles=glob("$$settings{tempdir}/Metadata/*.metadata.tsv");
   my $infile=$metadataFiles[0];
   if(@metadataFiles > 1){
     logmsg "WARNING: there is more than one metadata file in $$settings{tempdir}! Assuming $infile.";
   }
+
+  # Make this file available to the user but read from the temp
+  # file because the user would probably rather mess with
+  # the output one (however unlikely).
+  cp($infile,"$$settings{outdir}/Metadata/");
 
   my %metadata;
   open(my $metadataFh,"<",$infile) or die "ERROR: could not read $infile: $!";
@@ -220,7 +216,7 @@ sub filterTrees{
   # filter by new isolates
   my %treeWithNewIsolate;
   if($$settings{'new-isolates'}){
-    my $newisolatesFile=(glob("$$settings{tempdir}/*.new_isolates.tsv"))[0];
+    my $newisolatesFile=(glob("$$settings{tempdir}/Clusters/*.new_isolates.tsv"))[0];
     open(my $fh,"<",$newisolatesFile) or die "ERROR: cannot read $newisolatesFile: $!";
     my $header=<$fh>; chomp($header);
     my @header=split(/\t/,$header);
@@ -235,7 +231,11 @@ sub filterTrees{
   }
 
   # Start the filtering process
-  for my $tree(glob("$$settings{tempdir}/*.newick")){
+  for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
+    # If the tree passes filters, then it gets moved here
+    my $outtree="$$settings{outdir}/SNP_trees/".basename($tree);
+    my $tree_passed_filters=1;  # innocent until guilty
+
     # Read in the tree and its leaves
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree;
     my @sample=$treeObj->get_leaf_nodes(); # returns node objects
@@ -268,31 +268,36 @@ sub filterTrees{
       #logmsg "Tree passed: $tree";
     } else {
       #logmsg "Tree is not in the time window: $tree";
-      unlink($tree);
+      $tree_passed_filters=0;
     }
     
     # Filter for new isolates only if requested
     if($$settings{'new-isolates'}){
       my $PDS_acc=basename($tree,".newick_tree.newick");
       if($treeWithNewIsolate{$PDS_acc}){
-
+        
       } else {
-        unlink($tree);
+        $tree_passed_filters=0;
       }
     }  
 
     # TODO any future filters?
+
+    # If the tree passed all filters, then copy it over
+    cp($tree,$outtree) or die "ERROR copying $tree to $tree:\n  $!";
   }
+
 }
 
 sub makeReport{
   my($metadata,$settings)=@_;
   
-  my $reportFile="$$settings{tempdir}/report.pdf";
+  my $postscript="$$settings{outdir}/report.ps";
+  my $PDF="$$settings{outdir}/report.pdf";
 
-  for my $tree(glob("$$settings{tempdir}/*.newick")){
-    my $eps="$$settings{tempdir}/".basename($tree,'.newick').".eps";
-    my $gif="$$settings{tempdir}/".basename($tree,'.newick').".gif";
+  mkdir "$$settings{outdir}/images";
+  for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
+    my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree; # assume only one tree in the file
     #
     # Avoid a random divide by zero error in the cladogram module
@@ -316,10 +321,6 @@ sub makeReport{
       -left       => 0,
     );
     $cladogram->print(-file=>$eps);
-    
-    # Convert the eps to a gif for a larger report
-    #system("convert -density 300 -resize '1024x1024' -colorspace RGB -flatten $eps $gif");
-    #die "ERROR with imagemagick 'convert'" if $?;
   }
 
   # Make the full report
@@ -338,21 +339,23 @@ sub makeReport{
   $p->setfont("Times-Roman",32);
   $p->text({align=>"centre"},72*4,72*10,"Report from NCBI Pathogen Pipeline");
   $p->setfont("Times-Roman",24);
-  $p->text({align=>"centre"},72*4,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
+  $p->text({align=>"left"},72*4,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
   $p->text({align=>"left"},72*0.5,72*9.0,"Filters: from: $$settings{from}");
   $p->text({align=>"left"},72*0.5,72*8.5,"Filters: to: $$settings{to}");
   $p->setfont("Times-Roman",16);
   $p->text({align=>"centre"},72*4,72*1,"generated ".localtime()); 
 
+  # TODO make URL to NCBI results directory and eventually the NCBI online Genome Workbench
+
   # Make a new page per tree
   #$p->setcolour(30,30,30);
-  for my $eps(glob("$$settings{tempdir}/*.eps")){
+  for my $eps(glob("$$settings{outdir}/images/*.eps")){
     $p->newpage(++$pageNumber); # the PS module increments page numbers automatically starting with 1
     #$p->{direction}="RightDown";
     #$p->{coordorigin} = "LeftTop";   # coordinate origin bottom-left
     $p->setfont("Times-Roman",16);
     $p->setcolour("black");
-    logmsg "Writing $eps to file";
+    logmsg "Writing to $eps";
 
     $p->text({align=>"centre"},4*72,10*72,basename($eps,".newick_tree.eps"));
     if($p->err()){
@@ -409,14 +412,14 @@ sub makeReport{
       die "ERROR with $eps:\n". $p->err();
     }
   }
-  $p->output("$$settings{tempdir}/report.ps");
-  logmsg "Wrote $pageNumber pages to $$settings{tempdir}/report.ps";
+  $p->output($postscript);
+  logmsg "Wrote $pageNumber pages to $postscript";
   
-  system("ps2pdf $$settings{tempdir}/report.ps $$settings{tempdir}/report.pdf");
+  system("ps2pdf $postscript $PDF");
   if($?){
-    logmsg "WARNING: could not use `ps2pdf` to convert report.ps to report.pdf";
+    logmsg "WARNING: could not use `ps2pdf` to convert $postscript to $PDF";
   } else {
-    logmsg "Converted report.ps to report.pdf";
+    logmsg "Converted $postscript to $PDF";
   }
 }
 # A hacky way to parse a variety of dates
