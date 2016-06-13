@@ -178,33 +178,40 @@ sub readMetadata{
 
   # Assume the metadata file is the only one in the temp directory
   my @metadataFiles=glob("$$settings{tempdir}/Metadata/*.metadata.tsv");
-  my $infile=$metadataFiles[0];
-  if(@metadataFiles > 1){
-    logmsg "WARNING: there is more than one metadata file in $$settings{tempdir}! Assuming $infile.";
-  }
-
-  # Make this file available to the user but read from the temp
-  # file because the user would probably rather mess with
-  # the output one (however unlikely).
-  cp($infile,"$$settings{outdir}/Metadata/");
 
   my %metadata;
-  open(my $metadataFh,"<",$infile) or die "ERROR: could not read $infile: $!";
-  # Grab the header and turn it into an array
-  my $header=<$metadataFh>; chomp($header);
-  $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
-  my @header=split(/\t/,$header);
-  # Read the values in the file to associate them with the header(column) names
-  while(my $line=<$metadataFh>){
-    chomp($line);
-    my @field=split(/\t/,$line);
-    my %F;
-    @F{@header}=@field; # get an index of header_name => field_value
-    # The ID of this hash will be the PDT identifier
-    # because it is the same one used in the newick trees
-    $metadata{$F{target_acc}}=\%F;
+  for my $infile(@metadataFiles){
+    # Make this file available to the user but read from the temp
+    # file because the user would probably rather mess with
+    # the output one (however unlikely).
+    cp($infile,"$$settings{outdir}/Metadata/");
+
+    open(my $metadataFh,"<",$infile) or die "ERROR: could not read $infile: $!";
+    # Grab the header and turn it into an array
+    my $header=<$metadataFh>; chomp($header);
+    $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
+    my @header=split(/\t/,$header);
+    # Read the values in the file to associate them with the header(column) names
+    while(my $line=<$metadataFh>){
+      chomp($line);
+      my @field=split(/\t/,$line);
+      my %F;
+      @F{@header}=@field; # get an index of header_name => field_value
+      
+      # Add onto the metadata hash.
+      for(@header){
+        # The ID of this hash will be the PDT identifier
+        # because it is the same one used in the newick trees.
+        # Because there could potentially be multiple metadata
+        # spreadsheets, use the "equals if not blank"
+        # operator to set each field. NOTE: this means that
+        # in case of conflict, the first spreadsheet
+        # that is read will take priority in setting the value.
+        $metadata{$F{target_acc}}{$_}||=$F{$_};
+      }
+    }
+    close $metadataFh;
   }
-  close $metadataFh;
 
   return \%metadata;
 }
@@ -295,6 +302,7 @@ sub makeReport{
   my $postscript="$$settings{outdir}/report.ps";
   my $PDF="$$settings{outdir}/report.pdf";
 
+  logmsg "Creating phylogeny images";
   mkdir "$$settings{outdir}/images";
   for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
     my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
@@ -365,13 +373,14 @@ sub makeReport{
 
   # Make a new page per tree
   #$p->setcolour(30,30,30);
+  logmsg "Adding phylogeny images to larger report";
   for my $eps(glob("$$settings{outdir}/images/*.eps")){
     $p->newpage(++$pageNumber); # the PS module increments page numbers automatically starting with 1
     #$p->{direction}="RightDown";
     #$p->{coordorigin} = "LeftTop";   # coordinate origin bottom-left
     $p->setfont("Times-Roman",16);
     $p->setcolour("black");
-    logmsg "Writing to $eps";
+    #logmsg "Writing to $eps";
 
     my $tree_acc=basename($eps,".newick_tree.eps");
     $p->text({align=>"centre"},4*72,10.5*72,$tree_acc);
