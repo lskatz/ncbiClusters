@@ -3,6 +3,9 @@
 # AUTHORS: Lee Katz <lkatz@cdc.gov> and Errol Strain <Errol.Strain@fda.hhs.gov>
 # Run this script with --help for usage information.
 
+# Need Perl version 5.12 or greater
+require 5.12.0;
+
 use strict;
 use warnings;
 use Getopt::Long;
@@ -12,17 +15,18 @@ use File::Temp qw/tempdir/;
 use Data::Dumper;
 use POSIX qw/strftime/;
 use File::Copy qw/mv cp/;
-use List::Util qw/min max/;
+use List::Util qw/min max sum shuffle/;
+use List::MoreUtils qw/uniq/;
 
 # Import local modules
 use FindBin;
 use lib "$FindBin::RealBin/../lib/perl5";
-use Bio::Tree::Draw::Cladogram; # requires PostScript/TextBlock.pm in the lib dir
+use Bio::Tree::Draw::Cladogram; # requires PostScript/TextBlock.pm in the lib dir and so this is 'local'
 use Bio::TreeIO;
 use PostScript::Simple;
 use Time::Piece; # for parsing dates from Metadata.tsv
 use Config::Simple;
-#use Docopt;
+use Algorithm::Combinatorics qw/variations_with_repetition/;
 
 local $0=basename($0);
 sub logmsg { print STDERR "$0: @_\n"; }
@@ -31,12 +35,13 @@ exit(main());
 
 sub main{
   my $settings={};
-  GetOptions($settings,qw(help new-isolates report from=s to=s tempdir=s outdir=s set|results|resultsSet=s list maxTrees=i)) or die $!;
+  GetOptions($settings,qw(help new-isolates report from=s to=s tempdir=s outdir=s set|results|resultsSet=s list maxTrees=i line-list=s@)) or die $!;
   $$settings{domain}||="ftp.ncbi.nlm.nih.gov";
   $$settings{tempdir}||=tempdir("$0.XXXXXX",TMPDIR=>1,CLEANUP=>1);
   $$settings{outdir}||="out";
   $$settings{set}||="Listeria";
   $$settings{maxTrees}||=0;
+  $$settings{'line-list'}||=[];
 
   # Parse the date parameters
   if($$settings{from}){
@@ -89,6 +94,8 @@ sub listSets{
   $ftp->cwd("//pathogen/Results")
     or die "Cannot change working directory ", $ftp->message;
 
+  $ftp->quit;
+
   my @resultSets=$ftp->ls("");
 
   for(@resultSets){
@@ -119,18 +126,20 @@ sub downloadAll{
       or die "get failed", $ftp->message;
   }
 
-  #Retrieve SNP distances
-  logmsg "Retrieving SNP distances";
+  #Clusters directory files
   mkdir "$$settings{tempdir}/Clusters";
   mkdir "$$settings{outdir}/Clusters";
-  $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
-    or die "Cannot change working directory ", $ftp->message;
-  my @distfiles = $ftp->ls("*.SNP_distances.tsv");
-  foreach(@distfiles) {
-    $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
-      or die "get failed", $ftp->message;
-  }
+  #logmsg "Retrieving SNP distances";
+  #$ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
+  #  or die "Cannot change working directory ", $ftp->message;
+  #my @distfiles = $ftp->ls("*.SNP_distances.tsv");
+  #foreach(@distfiles) {
+  #  $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
+  #    or die "get failed", $ftp->message;
+  #}
+  #
   # Retrieve the list of newest isolates, also in this directory
+  logmsg "Retrieving a list of the latest isolates";
   my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv");
   foreach(@newIsolateFiles){
     $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
@@ -176,12 +185,17 @@ sub downloadAll{
 
 sub readMetadata{
   my($settings)=@_;
-
+  
   # Assume the metadata file is the only one in the temp directory
   my @metadataFiles=glob("$$settings{tempdir}/Metadata/*.metadata.tsv");
 
+  # Be able to map back and forth from pdt to biosample
+  my %pdt_biosample;
+  my %biosample_pdt;
+
   my %metadata;
   for my $infile(@metadataFiles){
+    logmsg "Reading $infile";
     # Make this file available to the user but read from the temp
     # file because the user would probably rather mess with
     # the output one (however unlikely).
@@ -210,8 +224,81 @@ sub readMetadata{
         # that is read will take priority in setting the value.
         $metadata{$F{target_acc}}{$_}||=$F{$_};
       }
+
+      if($F{target_acc} && $F{biosample_acc}){
+        $pdt_biosample{$F{target_acc}}=$F{biosample_acc};
+        $biosample_pdt{$F{biosample_acc}}=$F{target_acc};
+      }
     }
     close $metadataFh;
+  }
+
+  # Read the config file for spreadsheet headers
+  my $headerMappings=new Config::Simple("config/headerMappings.ini")->get_block("header_mappings");
+
+  # Added information from PulseNet line lists
+  for my $infile(@{$$settings{'line-list'}}){
+    open(my $lineList, "<", $infile) or die "ERROR: could not read line list $infile: $!";
+    # Grab the header and turn it into an array
+    my $header=<$lineList>; chomp($header);
+    $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
+    my @header=split(/\t/,$header);
+    # Some spreadsheet quality control
+    if(@header != uniq(@header)){
+      die "ERROR: some headers are duplicated in $infile";
+    }
+    while(my $line=<$lineList>){
+      chomp $line;
+      my @field=split(/\t/,$line);
+      my %F;
+      @F{@header}=@field;
+
+      # Figure out what I want this key to be. 
+      # Preferably, the PDT identifier (target_acc)
+      my $index;
+      for my $possibleIndexName(qw(NCBI_ACCESSION biosample_acc SAMN)){
+        # Need to save this variable to avoid uninitialized value in hash within hash warning
+        my $possibleIndexFromLine=$F{$possibleIndexName};
+        next if(!defined($possibleIndexFromLine));
+
+        $index=$F{$possibleIndexName};
+        # Don't break the loop here because we'd prefer the biosample_pdt index
+        
+        # Although the index can be found in the line list,
+        # it'd be better to find the PDT value in the NCBI metadata.
+        if(defined($biosample_pdt{$possibleIndexFromLine})){
+          $index=$biosample_pdt{$possibleIndexFromLine};
+          last;
+        }
+      }
+      die "ERROR: Could not find a biosample accession for \n".Dumper \%F if(!$index);
+
+      # Add onto the large metadata hash.
+      for my $pnHeader(@header){
+        # If this header can be translated to an NCBI header,
+        # do it.
+        if(my $ncbiHeader=$$headerMappings{$pnHeader}){
+          $metadata{$index}{$ncbiHeader}=$F{$pnHeader};
+        }
+        # Add the pulsenet value under the pulsenet header
+        $metadata{$index}{$pnHeader}=$F{$pnHeader};
+      }     
+    }
+    close $lineList;
+  }
+
+  # Get the rules for changing the label for each sample
+  my $customLabel=new Config::Simple("config/headerMappings.ini")->get_block("custom_label");
+  my @labelFields=split(/\s*\|\s*/,$$customLabel{label});
+  for my $target_acc(keys(%metadata)){
+    my $newLabel="$target_acc | ";
+    for my $field(@labelFields){
+      next if(!defined($metadata{$target_acc}{$field}));
+      next if($metadata{$target_acc}{$field}=~/^NULL$|^\s*$|^missing$/);
+      $newLabel.=$metadata{$target_acc}{$field}.' | ';
+    }
+    $newLabel=~s/ \| $//; # remove trailing pipe as a result of the above loop
+    $metadata{$target_acc}{label}=$newLabel;
   }
 
   return \%metadata;
@@ -243,6 +330,7 @@ sub filterTrees{
     # If the tree passes filters, then it gets moved here
     my $outtree="$$settings{outdir}/SNP_trees/".basename($tree);
     my $tree_passed_filters=1;  # innocent until guilty
+    my @whyFail; #Keep track of why a tree didn't pass filters for debugging
 
     # Read in the tree and its leaves
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree;
@@ -271,12 +359,13 @@ sub filterTrees{
       }
     }
 
-    # Delete the tree if it doesn't occur within the time window.
+    # If it doesn't occur within the time window.
     if($is_in_timewindow){
       #logmsg "Tree passed: $tree";
     } else {
       #logmsg "Tree is not in the time window: $tree";
       $tree_passed_filters=0;
+      push(@whyFail,"Not in time window");
     }
     
     # Filter for new isolates only if requested
@@ -286,13 +375,50 @@ sub filterTrees{
         
       } else {
         $tree_passed_filters=0;
+        push(@whyFail,"Tree does not have isolates in the new isolates list");
       }
     }  
+
+    # Only keep trees in the line lists, if line lists
+    # were supplied.
+    if(@{$$settings{'line-list'}} > 0){
+      
+      my $tree_has_linelist=0;
+      for my $s(@sample){
+        my $target_acc=$s->id;
+        $target_acc=~s/^\'|\'$//g; # remove single quotes that might appear around taxa in the tree
+        
+        # Check for anything that pulsenet would put into
+        # the metadata that NCBI wouldn't have. That will
+        # be the indication that it is in the line list.
+        # TODO: I should probably just read the line list
+        # directly.
+        if(
+             defined($$metadata{$target_acc}{Key}) # state ID
+          || defined($$metadata{$target_acc}{SourceCity}) 
+          || defined($$metadata{$target_acc}{SourceCounty})
+          || defined($$metadata{$target_acc}{PatientSex})
+          || defined($$metadata{$target_acc}{SeroType})
+          || defined($$metadata{$target_acc}{PatientAge})
+        ){
+          $tree_has_linelist=1;
+          last;
+        }
+      }
+      if($tree_has_linelist==0){
+        $tree_passed_filters=0;
+        push(@whyFail,"Tree does not have isolates in the line list");
+      }
+    }
 
     # TODO any future filters?
 
     # If the tree passed all filters, then copy it over
-    cp($tree,$outtree) or die "ERROR copying $tree to $tree:\n  $!";
+    if($tree_passed_filters){
+      cp($tree,$outtree) or die "ERROR copying $tree to $tree:\n  $!";
+    } else {
+      #logmsg "Tree failed the filters because ".join("\n",@whyFail);
+    }
   }
 
 }
@@ -303,19 +429,37 @@ sub makeReport{
   my $postscript="$$settings{outdir}/report.ps";
   my $PDF="$$settings{outdir}/report.pdf";
 
+  # Figure out a coloring scheme
+  my @colorPercentage=(0.1,0.3,0.5,0.7,0.9);
+  my @availableColor = variations_with_repetition(\@colorPercentage,3);
+  # Sort colors brightest to darkest instead of by RGB. Randomize colors
+  # that have an equal score in the sort.
+  @availableColor=sort { sum(map{exp($_)} @$b) <=> sum(map{exp($_)} @$a) } shuffle(@availableColor);
+  # Remove colors that are too bright
+  @availableColor=grep{!($$_[0]>0.7 && $$_[1] >0.7 && $$_[2] > 0.7)} @availableColor;
+  #die Dumper [map{join(", ",@$_)} @availableColor];
+
+  # Figure out what categories the user wants to color by
+  my $colorBy=new Config::Simple("config/colorBy.ini")->get_block("global");
+  my @colorBy=keys(%$colorBy);
+  my %colorCoding; # holds color coding combinations defined by the config file
+  $colorCoding{''} = pop(@availableColor); # when there is no color, choose black
+
   logmsg "Creating phylogeny images";
   mkdir "$$settings{outdir}/images";
-  for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
+  for my $tree(glob("$$settings{outdir}/SNP_trees/*.newick")){
     my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree; # assume only one tree in the file
-    #
+    
     # Avoid a random divide by zero error in the cladogram module
     if($treeObj->get_root_node->height==0){
       #$treeObj->get_root_node->branch_length(1e-8);
       next;  # Skip; not sure what to do about this right now
     }
 
-    addMetadataToTree($treeObj,$metadata,$settings);
+    # Adds colors into the tree object (and in the future, anything else).
+    addMetadataToTree($treeObj,$metadata,$colorBy,\%colorCoding,\@availableColor,$settings);
+
     my $cladogram=Bio::Tree::Draw::Cladogram->new(
       -tree       => $treeObj,
       #-font       => "sans-serif",
@@ -352,20 +496,37 @@ sub makeReport{
   $p->text({align=>"left"},72*0.5,72*9.0,"Filters: from: $$settings{from}");
   $p->text({align=>"left"},72*0.5,72*8.5,"Filters: to: $$settings{to}");
 
-  # Add a color legend
+  # Add a color legend in a black box 7"x2"
   $p->setcolour("black");
   $p->setlinewidth(1);
-  $p->box(72*0.5,72*6,72*7.5,72*8);
-  # First color: env/food
-  $p->setcolour("red");
-  $p->box({filled=>1},72*1,72*6.5,72*1.5,72*7);
-  $p->setcolour("black");
-  $p->text(72*2,72*6.5,"Environmental or Food");
-  # Second color: clinical
-  $p->setcolour("blue");
-  $p->box({filled=>1},72*1,72*7.2,72*1.5,72*7.7);
-  $p->setcolour("black");
-  $p->text(72*2,72*7.2,"Clinical");
+  my $wholeLegendHeight=4*72;
+  my $wholeLegendY1=4*72;
+  $p->box(72*0.5,$wholeLegendY1,72*7.5,72*4+$wholeLegendHeight);
+
+  # The height/width of each color legend box is 2". For
+  # keeping a margin, we will double the effective size
+  # and add one.
+  my $ptPerColor=($wholeLegendHeight/(1+2*scalar(keys(%colorCoding))));
+  my $legendYMarker=$wholeLegendY1; # the marker for where legend boxes are starts with the outer box
+  while(my($category,$color)=each(%colorCoding)){
+    $legendYMarker+=$ptPerColor; # adding margin
+    # Convert the decimal color used in BioPerl into the 0-255 range for PostScript::Simple.
+    $p->setcolour($$color[0]*255, $$color[1]*255, $$color[2]*255);
+    $p->box({filled=>1},
+      72*1,                       # x1
+      $legendYMarker,             # y1
+      72*1.0+$ptPerColor,         # x2
+      $legendYMarker+$ptPerColor, # y2
+    );
+
+    $p->setfont("Times-Roman",int($ptPerColor));
+    $p->setcolour("black");
+    $category||="No info";
+    #$p->text(72*1.0+$ptPerColor*2, $legendYMarker, $category."  ". join(", ",@$color)); # To the right of the box
+    $p->text(72*1.0+$ptPerColor*2, $legendYMarker, $category); # To the right of the box
+
+    $legendYMarker+=$ptPerColor; # advance marker past the legend box
+  }
 
   # Footer for time generaged
   $p->setcolour("black");
@@ -391,8 +552,8 @@ sub makeReport{
 
     # Make URL to NCBI results directory
     # TODO when possible, switch the URL to the NCBI online Genome Workbench
-    $p->setfont("Times-Roman",16);
-    $p->text({align=>"left"},72*0.5,72*10,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
+    $p->setfont("Times-Roman",12);
+    $p->text({align=>"left"},72*0.3,72*10,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
 
     # Bio::Tree::Draw::Cladogram puts decimals into the width
     # but PostScript::Simple cannot understand decimals.
@@ -486,7 +647,7 @@ sub parseDate{
 }
 
 sub addMetadataToTree{
-  my($treeObj,$metadata,$settings)=@_;
+  my($treeObj,$metadata,$colorBy,$colorCoding,$availableColor,$settings)=@_;
 
   for my $node($treeObj->get_leaf_nodes){
     # remove leading and lagging quotes
@@ -497,21 +658,30 @@ sub addMetadataToTree{
     # rename the node
     $node->id($$metadata{$target_acc}{label});
 
-    # add RGB color
-    my($red,$blue,$green)=(0.1,0.1,0.1); # almost black by default
-    if($$metadata{$target_acc}{attribute_package}=~/environmental|food/i){
-      $blue=0.9;
-      $red=0.3;
-      $green=0.3;
-    } elsif($$metadata{$target_acc}{attribute_package}=~/clinical|host/i){
-      $blue=0.3;
-      $red=0.9;
-      $green=0.3;
+    # Color by user-defined categories
+    my $color;
+    # Currently this loop only works if there is only one category in the ini file.
+    # TODO allow for more categories.
+    for my $colorKey (keys(%$colorBy)){
+      $$metadata{$target_acc}{$colorKey}//="";
+      if($$metadata{$target_acc}{$colorKey} =~/^NULL$|^\s*$|^missing$/){
+        next;
+      }
+
+      $color=$$colorCoding{ $$metadata{$target_acc}{$colorKey} };
+      if(!$color){
+        $color=shift(@$availableColor);
+        $$colorCoding{ $$metadata{$target_acc}{$colorKey} } = $color;
+      }
     }
-    #logmsg "added $red $green $blue to $target_acc";
-    $node->add_tag_value("Rcolor",$red);
-    $node->add_tag_value("Gcolor",$green);
-    $node->add_tag_value("Bcolor",$blue);
+
+    if(!$color){
+      $color=$$colorCoding{''};
+    }
+
+    $node->add_tag_value("Rcolor",$$color[0]);
+    $node->add_tag_value("Gcolor",$$color[1]);
+    $node->add_tag_value("Bcolor",$$color[2]);
   }
 }
     
@@ -532,6 +702,14 @@ sub usage{
   --report                  Create a report in outdir/report.pdf
 
   FILTERING
+  --line-list   ''          A tab-delimited spreadsheet of a
+                            PulseNet line list. Only trees
+                            containing these isolates will
+                            be reported. The headers may
+                            not contain special characters
+                            such as '#'.
+                            Multiple --line-list flags are
+                            allowed; one per line list.
   --from        $from   Include trees with any isolates
                             as early as this date. Dates
                             can be in the format of either
