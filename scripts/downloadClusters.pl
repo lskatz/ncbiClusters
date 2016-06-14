@@ -508,7 +508,9 @@ sub makeReport{
   # and add one.
   my $ptPerColor=($wholeLegendHeight/(1+2*scalar(keys(%colorCoding))));
   my $legendYMarker=$wholeLegendY1; # the marker for where legend boxes are starts with the outer box
-  while(my($category,$color)=each(%colorCoding)){
+  # Alphabetize the legend
+  for my $category(sort {$b cmp $a} keys(%colorCoding)){
+    my $color=$colorCoding{$category};
     $legendYMarker+=$ptPerColor; # adding margin
     # Convert the decimal color used in BioPerl into the 0-255 range for PostScript::Simple.
     $p->setcolour($$color[0]*255, $$color[1]*255, $$color[2]*255);
