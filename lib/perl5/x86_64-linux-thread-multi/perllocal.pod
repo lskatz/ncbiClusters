@@ -64,3 +64,25 @@ C<EXE_FILES: >
 
 =back
 
+=head2 Tue Jun 14 12:19:56 2016: C<Module> L<Algorithm::Combinatorics|Algorithm::Combinatorics>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.27>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
