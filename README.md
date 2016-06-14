@@ -9,9 +9,9 @@ Get a report of new clusters via the NCBI Pathogen Detection Pipeline
 
 ## Requirements
 
-* Perl
+* Perl v5.12 or greater
 * BioPerl
-* ImageMagick
+* ps2pdf (required for pdf instead of ps reports)
 
 ## Getting help
     
