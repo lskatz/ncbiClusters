@@ -16,7 +16,7 @@ use List::Util qw/min max/;
 
 # Import local modules
 use FindBin;
-use lib "$FindBin::RealBin/../lib";
+use lib "$FindBin::RealBin/../lib/perl5";
 use Bio::Tree::Draw::Cladogram; # requires PostScript/TextBlock.pm in the lib dir
 use Bio::TreeIO;
 use PostScript::Simple;

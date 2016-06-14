@@ -1,0 +1,66 @@
+=head2 Tue Jun 14 08:40:03 2016: C<Module> L<PostScript::Simple|PostScript::Simple>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.09>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Tue Jun 14 08:40:09 2016: C<Module> L<Config::Simple|Config::Simple>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 4.58>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Tue Jun 14 08:40:14 2016: C<Module> L<PostScript::Metrics|PostScript::Metrics>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/gzu2/src/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.06>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
