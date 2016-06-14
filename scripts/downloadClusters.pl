@@ -1,7 +1,7 @@
 #!/usr/bin/env perl 
 #
-# Author: Error Strain
-# Modified: Lee Katz <lkatz@cdc.gov>
+# AUTHORS: Lee Katz <lkatz@cdc.gov> and Errol Strain <Errol.Strain@fda.hhs.gov>
+# Run this script with --help for usage information.
 
 use strict;
 use warnings;
@@ -21,6 +21,7 @@ use Bio::Tree::Draw::Cladogram; # requires PostScript/TextBlock.pm in the lib di
 use Bio::TreeIO;
 use PostScript::Simple;
 use Time::Piece; # for parsing dates from Metadata.tsv
+use Config::Simple;
 #use Docopt;
 
 local $0=basename($0);
@@ -518,7 +519,6 @@ sub usage{
   my($settings)=@_;
   my $to=$$settings{to}->strftime("%m/%d/%Y");
   my $from=$$settings{from}->strftime("%m/%d/%Y");
-  my $epoch=strftime("%m/%d/%Y",localtime(0));
   "$0: downloads NCBI Pathogen Detection Pipeline results
   Usage: $0 latest
     where 'latest' is the Pathogen Detection Pipeline 
