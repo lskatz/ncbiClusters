@@ -1,0 +1,45 @@
+{
+   "abstract" : "Efficient generation of combinatorial sequences",
+   "author" : [
+      "Xavier Noria <FXN@cpan.org>"
+   ],
+   "dynamic_config" : 0,
+   "generated_by" : "ExtUtils::MakeMaker version 6.56, CPAN::Meta::Converter version 2.150005",
+   "license" : [
+      "unknown"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Algorithm-Combinatorics",
+   "no_index" : {
+      "directory" : [
+         "t",
+         "inc"
+      ]
+   },
+   "prereqs" : {
+      "build" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "0"
+         }
+      },
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "0"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "FindBin" : "0",
+            "Scalar::Util" : "0",
+            "Test::More" : "0",
+            "XSLoader" : "0"
+         }
+      }
+   },
+   "release_status" : "stable",
+   "version" : "0.27",
+   "x_serialization_backend" : "JSON::PP version 2.27203"
+}
