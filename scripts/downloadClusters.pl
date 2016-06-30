@@ -35,11 +35,10 @@ exit(main());
 
 sub main{
   my $settings={};
-  GetOptions($settings,qw(help new-isolates report from=s to=s tempdir=s outdir=s set|results|resultsSet=s list maxTrees=i line-list=s@)) or die $!;
+  GetOptions($settings,qw(help new-isolates from=s to=s tempdir=s outdir=s list maxTrees=i line-list=s@)) or die $!;
   $$settings{domain}||="ftp.ncbi.nlm.nih.gov";
   $$settings{tempdir}||=tempdir("$0.XXXXXX",TMPDIR=>1,CLEANUP=>1);
   $$settings{outdir}||="out";
-  $$settings{set}||="Listeria";
   $$settings{maxTrees}||=0;
   $$settings{'line-list'}||=[];
 
@@ -55,16 +54,22 @@ sub main{
     $$settings{to}||=parseDate(strftime("%m/%d/%Y",localtime()));
   }
 
+  die usage($settings) if($$settings{help});
+
+  ($$settings{set},$$settings{remoteDir})=@ARGV;
+
   if($$settings{list}){
-    listSets($settings);
+    my $list=listSets($settings);
+    for(@$list){
+      print $_."\n";
+    }
     return 0;
   }
 
-  $$settings{remoteDir}||=$ARGV[0];
-
-  if(!$$settings{remoteDir} || $$settings{help}){
-    die usage($settings);
-  }
+  # Can only die on error only after the program has
+  # had a chance to run listSets().
+  die "ERROR: need results set (ie, taxon) such as Listeria\n".usage() if(!$$settings{set});
+  die "ERROR: need remote directory\n".usage() if(!$$settings{remoteDir});
 
   mkdir($$settings{tempdir}) if(!-e $$settings{tempdir});
   logmsg "Temporary directory is $$settings{tempdir}";
@@ -72,19 +77,35 @@ sub main{
   mkdir($$settings{outdir}) if(!-e $$settings{outdir});
 
   downloadAll($$settings{remoteDir},$settings);
-  my $metadata=readMetadata($settings);
+
+  # Sort the metadata by order of latest result first.
+  # This should only be one file unless the tmp folder
+  # has been used more than once.
+  my @metadataFiles=sort { 
+      my $aInt=basename($a);
+      my $bInt=basename($b);
+      $aInt=~s/PDG\d+\.(\d+)\.metadata.tsv/$1/;
+      $bInt=~s/PDG\d+\.(\d+)\.metadata.tsv/$1/;
+      return $bInt <=> $aInt;
+    } glob("$$settings{tempdir}/Metadata/*.metadata.tsv");
+  my $PDG=basename($metadataFiles[0],".metadata.tsv");
+  my $metadata=readMetadata($metadataFiles[0],$settings);
 
   # Copies anything that passes the filters to the 
   # output directory.
   filterTrees($metadata,$settings);
 
-  makeReport($metadata,$settings) if($$settings{report});
+  makeReport($metadata,$PDG,$settings);
 
   return 0;
 }
 
 sub listSets{
   my($settings)=@_;
+
+  if($$settings{set}){
+    return listRemoteDirs($settings);
+  }
 
   my $ftp = Net::FTP->new($$settings{domain}, Debug => 0)
     or die "Cannot connect to $$settings{domain}: $@";
@@ -94,15 +115,28 @@ sub listSets{
   $ftp->cwd("//pathogen/Results")
     or die "Cannot change working directory ", $ftp->message;
 
-  $ftp->quit;
-
   my @resultSets=$ftp->ls("");
 
-  for(@resultSets){
-    print $_."\n";
-  }
+  $ftp->quit;
   
   return \@resultSets;
+}
+
+sub listRemoteDirs{
+  my($settings)=@_;
+  my $ftp = Net::FTP->new($$settings{domain}, Debug => 0)
+    or die "Cannot connect to $$settings{domain}: $@";
+  $ftp->login("anonymous",'-anonymous@')
+      or die "Cannot login ", $ftp->message;
+  
+  $ftp->cwd("//pathogen/Results/$$settings{set}")
+    or die "Cannot change working directory ", $ftp->message;
+
+  my @remoteDir=sort {$a cmp $b} $ftp->ls("");
+
+  $ftp->quit;
+  
+  return \@remoteDir;
 }
 
 sub downloadAll{
@@ -112,6 +146,7 @@ sub downloadAll{
     or die "Cannot connect to $$settings{domain}: $@";
   $ftp->login("anonymous",'-anonymous@')
       or die "Cannot login ", $ftp->message;
+  $ftp->ascii(); # download ascii encoding
 
 
   #Retrieve the metadata file
@@ -140,7 +175,10 @@ sub downloadAll{
   #
   # Retrieve the list of newest isolates, also in this directory
   logmsg "Retrieving a list of the latest isolates";
-  my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv");
+  $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
+    or die "Cannot change working directory to Clusters. It is possible that '$$settings{set}' ($remoteDir) does not exist. ", $ftp->message;
+  my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv")
+    or die "ERROR with command while in Clusters directory: ls *.new_isolates.tsv: ", $ftp->message;
   foreach(@newIsolateFiles){
     $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
       or die "get failed", $ftp->message;
@@ -148,29 +186,40 @@ sub downloadAll{
   
 
   #Retrieve SNP trees
-  logmsg "Retrieving trees";
+  logmsg "Reading the remote SNP_trees directory";
   mkdir "$$settings{tempdir}/SNP_trees";
   mkdir "$$settings{outdir}/SNP_trees";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/SNP_trees/")
     or die "Cannot change working directory ", $ftp->message;
-  $ftp->ascii(); # download ascii encoding
-  my @treefiles = $ftp->ls("*/*.newick");
-  @treefiles=reverse(@treefiles); # assumed reverse order so that we get mostly new trees first
-  logmsg scalar(@treefiles)." trees to download";
-  for(my $i=0;$i<@treefiles;$i++){
+  # Have to ls on the local folder because it would be too many results
+  # for the server to return.  Cannot ls on */*.newick.
+  my @SNP_dir = $ftp->ls("")
+    or die "ERROR: cannot get directory contents: ", $ftp->message;
+  die "INTERNAL ERROR: I only saw ".scalar(@SNP_dir) if(@SNP_dir < 1);
+  @SNP_dir=reverse(@SNP_dir);        # Reverse order so that we get mostly new trees first
+  @SNP_dir=grep(/^PDS\d+/,@SNP_dir); # Keep only directories that begin with PDS
+  # TODO filter trees to download, to save tons of time. Do the filtering
+  # step here instead of after all trees are downloaded.
+  logmsg scalar(@SNP_dir)." trees to download";
+  for(my $i=0;$i<@SNP_dir;$i++){
     if($i % 100 == 0 && $i>0){
-      logmsg "Finished downloading $i trees";
+      logmsg "Finished downloading $i trees out of ".scalar(@SNP_dir);
     }
 
-    my $localfile="$$settings{tempdir}/SNP_trees/".basename($treefiles[$i]);
+    # If it is already here and downloaded, then don't
+    # download again.
+    my $localtree="$$settings{tempdir}/SNP_trees/$SNP_dir[$i].newick_tree.newick"; 
+    next if(-e $localtree);
 
-    # Don't download the file if you already have it or
-    # if there wasn't even a tree in that directory (unlikely)
-    if(-e $localfile){
-      #logmsg "Found $localfile; skipping";
-      next;
-    }
-    $ftp->get($treefiles[$i],$localfile)
+    # Look for the tree file
+    my @cluster_files=$ftp->ls($SNP_dir[$i]) or die "ERROR: could not read $SNP_dir[$i]: ",$ftp->message;
+    my $remotetree=(grep(/\.newick$/,@cluster_files))[0];
+    # there should be a newick tree in each dir, but don't bother downloading
+    # a null tree in case it happens.
+    next if(!$remotetree);
+
+    # Download the tree file.
+    $ftp->get($remotetree,$localtree)
       or die "get failed", $ftp->message;
 
     if($$settings{maxTrees} && $i >= $$settings{maxTrees}){
@@ -180,58 +229,53 @@ sub downloadAll{
 
   $ftp->quit;
 
-  return scalar(@treefiles);
+  return scalar(@SNP_dir);
 }
 
 sub readMetadata{
-  my($settings)=@_;
+  my($infile,$settings)=@_;
   
-  # Assume the metadata file is the only one in the temp directory
-  my @metadataFiles=glob("$$settings{tempdir}/Metadata/*.metadata.tsv");
-
   # Be able to map back and forth from pdt to biosample
   my %pdt_biosample;
   my %biosample_pdt;
 
   my %metadata;
-  for my $infile(@metadataFiles){
-    logmsg "Reading $infile";
-    # Make this file available to the user but read from the temp
-    # file because the user would probably rather mess with
-    # the output one (however unlikely).
-    cp($infile,"$$settings{outdir}/Metadata/");
+  logmsg "Reading $infile";
+  # Make this file available to the user but read from the temp
+  # file because the user would probably rather mess with
+  # the output one (however unlikely).
+  cp($infile,"$$settings{outdir}/Metadata/");
 
-    open(my $metadataFh,"<",$infile) or die "ERROR: could not read $infile: $!";
-    # Grab the header and turn it into an array
-    my $header=<$metadataFh>; chomp($header);
-    $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
-    my @header=split(/\t/,$header);
-    # Read the values in the file to associate them with the header(column) names
-    while(my $line=<$metadataFh>){
-      chomp($line);
-      my @field=split(/\t/,$line);
-      my %F;
-      @F{@header}=@field; # get an index of header_name => field_value
-      
-      # Add onto the metadata hash.
-      for(@header){
-        # The ID of this hash will be the PDT identifier
-        # because it is the same one used in the newick trees.
-        # Because there could potentially be multiple metadata
-        # spreadsheets, use the "equals if not blank"
-        # operator to set each field. NOTE: this means that
-        # in case of conflict, the first spreadsheet
-        # that is read will take priority in setting the value.
-        $metadata{$F{target_acc}}{$_}||=$F{$_};
-      }
-
-      if($F{target_acc} && $F{biosample_acc}){
-        $pdt_biosample{$F{target_acc}}=$F{biosample_acc};
-        $biosample_pdt{$F{biosample_acc}}=$F{target_acc};
-      }
+  open(my $metadataFh,"<",$infile) or die "ERROR: could not read $infile: $!";
+  # Grab the header and turn it into an array
+  my $header=<$metadataFh>; chomp($header);
+  $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
+  my @header=split(/\t/,$header);
+  # Read the values in the file to associate them with the header(column) names
+  while(my $line=<$metadataFh>){
+    chomp($line);
+    my @field=split(/\t/,$line);
+    my %F;
+    @F{@header}=@field; # get an index of header_name => field_value
+    
+    # Add onto the metadata hash.
+    for(@header){
+      # The ID of this hash will be the PDT identifier
+      # because it is the same one used in the newick trees.
+      # Because there could potentially be multiple metadata
+      # spreadsheets, use the "equals if not blank"
+      # operator to set each field. NOTE: this means that
+      # in case of conflict, the first spreadsheet
+      # that is read will take priority in setting the value.
+      $metadata{$F{target_acc}}{$_}||=$F{$_};
     }
-    close $metadataFh;
+
+    if($F{target_acc} && $F{biosample_acc}){
+      $pdt_biosample{$F{target_acc}}=$F{biosample_acc};
+      $biosample_pdt{$F{biosample_acc}}=$F{target_acc};
+    }
   }
+  close $metadataFh;
 
   # Read the config file for spreadsheet headers
   my $headerMappings=new Config::Simple("config/headerMappings.ini")->get_block("header_mappings");
@@ -245,6 +289,12 @@ sub readMetadata{
     my @header=split(/\t/,$header);
     # Some spreadsheet quality control
     if(@header != uniq(@header)){
+      my %uniq;
+      for(@header){
+        if($uniq{$_}++){
+          logmsg "Found duplicate header $_";
+        }
+      }
       die "ERROR: some headers are duplicated in $infile";
     }
     while(my $line=<$lineList>){
@@ -271,7 +321,12 @@ sub readMetadata{
           last;
         }
       }
-      die "ERROR: Could not find a biosample accession for \n".Dumper \%F if(!$index);
+      # TODO try to use eutils to find a biosample accession if there isn't one
+      # in the spreadsheet.
+      if(!$index){
+        logmsg "WARNING: Could not find a biosample accession for \n".Dumper \%F;
+        next;
+      }
 
       # Add onto the large metadata hash.
       for my $pnHeader(@header){
@@ -311,6 +366,7 @@ sub filterTrees{
   # filter by new isolates
   my %treeWithNewIsolate;
   if($$settings{'new-isolates'}){
+    logmsg "Filtering trees by new isolates, identified by $$settings{tempdir}/Clusters/*.new_isolates.tsv";
     my $newisolatesFile=(glob("$$settings{tempdir}/Clusters/*.new_isolates.tsv"))[0];
     open(my $fh,"<",$newisolatesFile) or die "ERROR: cannot read $newisolatesFile: $!";
     my $header=<$fh>; chomp($header);
@@ -326,6 +382,7 @@ sub filterTrees{
   }
 
   # Start the filtering process
+  logmsg "Filtering trees by time and/or by line list. If none were given, then no trees will be filtered by this process.";
   for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
     # If the tree passes filters, then it gets moved here
     my $outtree="$$settings{outdir}/SNP_trees/".basename($tree);
@@ -421,10 +478,14 @@ sub filterTrees{
     }
   }
 
+  logmsg "Done filtering";
+
 }
 
 sub makeReport{
-  my($metadata,$settings)=@_;
+  my($metadata,$PDG,$settings)=@_;
+
+  logmsg "Making the PDF report";
   
   my $postscript="$$settings{outdir}/report.ps";
   my $PDF="$$settings{outdir}/report.pdf";
@@ -442,12 +503,13 @@ sub makeReport{
   # Figure out what categories the user wants to color by
   my $colorBy=new Config::Simple("config/colorBy.ini")->get_block("global");
   my @colorBy=keys(%$colorBy);
-  my %colorCoding; # holds color coding combinations defined by the config file
+  my %colorCoding=(''=>[0,0,0]); # holds color coding combinations defined by the config file
   $colorCoding{''} = pop(@availableColor); # when there is no color, choose black
 
   logmsg "Creating phylogeny images";
   mkdir "$$settings{outdir}/images";
   for my $tree(glob("$$settings{outdir}/SNP_trees/*.newick")){
+    my $PDS=basename($tree,".newick_tree.newick");
     my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
     my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree; # assume only one tree in the file
     
@@ -492,9 +554,11 @@ sub makeReport{
   $p->setfont("Times-Roman",32);
   $p->text({align=>"centre"},72*4,72*10,"Report from NCBI Pathogen Pipeline");
   $p->setfont("Times-Roman",24);
-  $p->text({align=>"left"},72*4,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
-  $p->text({align=>"left"},72*0.5,72*9.0,"Filters: from: $$settings{from}");
-  $p->text({align=>"left"},72*0.5,72*8.5,"Filters: to: $$settings{to}");
+  $p->text({align=>"left"},72*0.5,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
+  $p->text({align=>"left"},72*0.5,72*9.0,"Filters:");
+  $p->setfont("Times-Roman",18);
+  $p->text({align=>"left"},72*0.5,72*8.5,"  from: $$settings{from}");
+  $p->text({align=>"left"},72*0.5,72*8.0,"  to: $$settings{to}");
 
   # Add a color legend in a black box 7"x2"
   $p->setcolour("black");
@@ -510,7 +574,7 @@ sub makeReport{
   my $legendYMarker=$wholeLegendY1; # the marker for where legend boxes are starts with the outer box
   # Alphabetize the legend
   for my $category(sort {$b cmp $a} keys(%colorCoding)){
-    my $color=$colorCoding{$category};
+    my $color=$colorCoding{$category} || [0,0,0];
     $legendYMarker+=$ptPerColor; # adding margin
     # Convert the decimal color used in BioPerl into the 0-255 range for PostScript::Simple.
     $p->setcolour($$color[0]*255, $$color[1]*255, $$color[2]*255);
@@ -553,9 +617,9 @@ sub makeReport{
     }
 
     # Make URL to NCBI results directory
-    # TODO when possible, switch the URL to the NCBI online Genome Workbench
     $p->setfont("Times-Roman",12);
-    $p->text({align=>"left"},72*0.3,72*10,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
+    $p->text({align=>"left"},72*0.3,72*10,"http://www.ncbi.nlm.nih.gov/pathogens/$$settings{set}/$PDG/$tree_acc");
+    $p->text({align=>"left"},72*0.3,72*9.7,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
 
     # Bio::Tree::Draw::Cladogram puts decimals into the width
     # but PostScript::Simple cannot understand decimals.
@@ -692,16 +756,21 @@ sub usage{
   my $to=$$settings{to}->strftime("%m/%d/%Y");
   my $from=$$settings{from}->strftime("%m/%d/%Y");
   "$0: downloads NCBI Pathogen Detection Pipeline results
-  Usage: $0 latest
-    where 'latest' is the Pathogen Detection Pipeline 
+  Usage: $0 resultsSet remoteDir
+    where 'remoteDir' is the Pathogen Detection Pipeline 
     directory from which to retrieve results
+    and 'resultsSet' is the taxon to download, e.g., Listeria
 
   --tempdir     /tmp        Where temporary files go including
-                            trees, metadata, etc
+                            trees, metadata, etc. Useful for
+                            running this pipeline multiple times
+                            and downloading only once.
   --outdir      ./out       Where output files go
-  --resultsSet  Listeria    Which NCBI results set to download
-  --list                    List the options for results sets
-  --report                  Create a report in outdir/report.pdf
+  --list                    List the options for results sets, 
+                            i.e., taxa.
+                            If a taxon/resultsSet parameter
+                            is already given, then it will list
+                            all possible remoteDirs.
 
   FILTERING
   --line-list   ''          A tab-delimited spreadsheet of a
