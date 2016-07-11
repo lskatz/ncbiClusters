@@ -27,9 +27,9 @@ use PostScript::Simple;
 use Time::Piece; # for parsing dates from Metadata.tsv
 use Config::Simple;
 use Algorithm::Combinatorics qw/variations_with_repetition/;
+use NcbiClusters qw/logmsg listSets/;
 
 local $0=basename($0);
-sub logmsg { print STDERR "$0: @_\n"; }
 
 exit(main());
 
@@ -68,8 +68,8 @@ sub main{
 
   # Can only die on error only after the program has
   # had a chance to run listSets().
-  die "ERROR: need results set (ie, taxon) such as Listeria\n".usage() if(!$$settings{set});
-  die "ERROR: need remote directory\n".usage() if(!$$settings{remoteDir});
+  die "ERROR: need results set (ie, taxon) such as Listeria\n".usage($settings) if(!$$settings{set});
+  die "ERROR: need remote directory\n".usage($settings) if(!$$settings{remoteDir});
 
   mkdir($$settings{tempdir}) if(!-e $$settings{tempdir});
   logmsg "Temporary directory is $$settings{tempdir}";
@@ -100,27 +100,6 @@ sub main{
   return 0;
 }
 
-sub listSets{
-  my($settings)=@_;
-
-  if($$settings{set}){
-    return listRemoteDirs($settings);
-  }
-
-  my $ftp = Net::FTP->new($$settings{domain}, Debug => 0)
-    or die "Cannot connect to $$settings{domain}: $@";
-  $ftp->login("anonymous",'-anonymous@')
-      or die "Cannot login ", $ftp->message;
-  
-  $ftp->cwd("//pathogen/Results")
-    or die "Cannot change working directory ", $ftp->message;
-
-  my @resultSets=$ftp->ls("");
-
-  $ftp->quit;
-  
-  return \@resultSets;
-}
 
 sub listRemoteDirs{
   my($settings)=@_;
@@ -503,7 +482,7 @@ sub makeReport{
   # Figure out what categories the user wants to color by
   my $colorBy=new Config::Simple("config/colorBy.ini")->get_block("global");
   my @colorBy=keys(%$colorBy);
-  my %colorCoding=(''=>[0,0,0]); # holds color coding combinations defined by the config file
+  my %colorCoding;#=(''=>[0,0,0]); # holds color coding combinations defined by the config file
   $colorCoding{''} = pop(@availableColor); # when there is no color, choose black
 
   logmsg "Creating phylogeny images";
@@ -574,7 +553,7 @@ sub makeReport{
   my $legendYMarker=$wholeLegendY1; # the marker for where legend boxes are starts with the outer box
   # Alphabetize the legend
   for my $category(sort {$b cmp $a} keys(%colorCoding)){
-    my $color=$colorCoding{$category} || [0,0,0];
+    my $color=$colorCoding{$category} or next;
     $legendYMarker+=$ptPerColor; # adding margin
     # Convert the decimal color used in BioPerl into the 0-255 range for PostScript::Simple.
     $p->setcolour($$color[0]*255, $$color[1]*255, $$color[2]*255);
