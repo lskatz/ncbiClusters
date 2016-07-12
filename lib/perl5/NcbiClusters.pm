@@ -11,7 +11,11 @@ use Time::Piece;
 
 use Exporter qw/import/;
 
-our @EXPORT_OK = qw(logmsg listSets downloadAll parseDate findBiosample Dumper colorScheme);
+our @EXPORT_OK = qw(logmsg listSets downloadAll parseDate findBiosample Dumper colorScheme randColor);
+
+# Keep track of the colors that are used
+our @_colorScheme=();
+our %_colorScheme=();
 
 sub logmsg { print STDERR "$0: @_\n"; }
 
@@ -335,8 +339,33 @@ sub colorScheme{
   # need to shuffle it.
   @color = sort { $$a[1] <=> $$b[1] } @color;
 
+  @_colorScheme=@color;
+  for(@color){
+    my $key=join(" ",@$_);
+    $_colorScheme{$key}=1;
+  }
+
   return @color if wantarray;
   return \@color;
+}
+
+sub randColor{
+  my($settings)=@_;
+
+  die "ERROR: need to call colorScheme() before this subroutine" if(!@_colorScheme);
+
+  # Make up a new color
+  my $color=[rand(1),rand(1),rand(1)];
+  $_=sprintf("%0.3f",$_) for(@$color);
+
+  while($_colorScheme{"@$color"}){
+    logmsg "WARNING: I have already seen color @$color";
+    $color=randColor($settings);
+  }
+
+  $_colorScheme{join(" ",@$color)}=1;
+  
+  return $color;
 }
 
 

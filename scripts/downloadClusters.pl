@@ -26,7 +26,7 @@ use PostScript::Simple;
 use Time::Piece; # for parsing dates from Metadata.tsv
 use Config::Simple;
 use Algorithm::Combinatorics qw/variations_with_repetition/;
-use NcbiClusters qw/logmsg listSets downloadAll parseDate Dumper colorScheme/;
+use NcbiClusters qw/logmsg listSets downloadAll parseDate Dumper colorScheme randColor/;
 
 local $0=basename($0);
 
@@ -393,6 +393,7 @@ sub makeReport{
     # Avoid a random divide by zero error in the cladogram module
     if($treeObj->get_root_node->height==0){
       #$treeObj->get_root_node->branch_length(1e-8);
+      logmsg "Skipping $tree: the root height is zero which causes errors in BioPerl.";
       next;  # Skip; not sure what to do about this right now
     }
 
@@ -440,7 +441,7 @@ sub makeReport{
   # Add a color legend in a black box 7"x2"
   $p->setcolour("black");
   $p->setlinewidth(1);
-  my $wholeLegendHeight=4*72;
+  my $wholeLegendHeight=5.5*72;
   my $wholeLegendY1=2*72;
   $p->box(72*0.5,$wholeLegendY1,72*7.5,$wholeLegendY1+$wholeLegendHeight);
 
@@ -479,7 +480,12 @@ sub makeReport{
   # Make a new page per tree
   #$p->setcolour(30,30,30);
   logmsg "Adding phylogeny images to larger report";
-  for my $eps(glob("$$settings{outdir}/images/*.eps")){
+  for my $tree(glob("$$settings{outdir}/SNP_trees/*.newick")){
+    my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
+    if(!-e $eps){
+      logmsg "Warning: I could not locate the eps image for $tree. I will not include this in the report.";
+      next;
+    }
     $p->newpage(++$pageNumber); # the PS module increments page numbers automatically starting with 1
     #$p->{direction}="RightDown";
     #$p->{coordorigin} = "LeftTop";   # coordinate origin bottom-left
@@ -576,7 +582,7 @@ sub addMetadataToTree{
     # Currently this loop only works if there is only one category in the ini file.
     # TODO allow for more categories.
     for my $colorKey (keys(%$colorBy)){
-      $$metadata{$target_acc}{$colorKey}//="";
+      $$metadata{$target_acc}{$colorKey}||="Missing";
       if($$metadata{$target_acc}{$colorKey} =~/^NULL$|^\s*$|^missing$/i){
         next;
       }
@@ -584,10 +590,15 @@ sub addMetadataToTree{
       $color=$$colorCoding{ $$metadata{$target_acc}{$colorKey} };
       if(!$color){
         $color=shift(@$availableColor);
+        # If there still isn't a color, make one up
+        if(!$color){
+          $color=randColor();
+        }
         $$colorCoding{ $$metadata{$target_acc}{$colorKey} } = $color;
       }
     }
 
+    # Translate 'null' values to 'Missing'
     if(!$color){
       $color=$$colorCoding{Missing};
     }
