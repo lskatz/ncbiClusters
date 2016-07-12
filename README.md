@@ -4,8 +4,11 @@ Get a report of new clusters via the NCBI Pathogen Detection Pipeline
 
 ## Usage
     
-    perl scripts/downloadClusters.pl --resultsSet Listeria latest
-    R --no-save < scripts/snpLmNCBI.R
+    perl downloadClusters.pl resultsSet remoteDir
+    
+Where `remoteDir` is the Pathogen Detection Pipeline directory from which to retrieve results and `resultsSet`
+is the taxon to download, e.g., Listeria
+
 
 ## Requirements
 
