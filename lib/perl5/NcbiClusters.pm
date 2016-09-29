@@ -2,6 +2,7 @@
 package NcbiClusters;
 use strict;
 use warnings;
+use File::Basename qw/basename/;
 use Data::Dumper qw/Dumper/;
 # Alphabetize data dump keys
 $Data::Dumper::Sortkeys=sub{my($hash)=@_; return [sort {lc $a cmp lc $b} keys(%$hash)]};
@@ -186,26 +187,37 @@ sub downloadAll{
     or die "Cannot change working directory ", $ftp->message;
   # Have to ls on the local folder because it would be too many results
   # for the server to return.  Cannot ls on */*.newick.
-  my @SNP_dir = $ftp->ls("")
+  my @SNP_targz = $ftp->ls("")
     or die "ERROR: cannot get directory contents: ", $ftp->message;
-  die "INTERNAL ERROR: I only saw ".scalar(@SNP_dir) if(@SNP_dir < 1);
-  @SNP_dir=reverse(@SNP_dir);        # Reverse order so that we get mostly new trees first
-  @SNP_dir=grep(/^PDS\d+/,@SNP_dir); # Keep only directories that begin with PDS
+  die "INTERNAL ERROR: I only saw ".scalar(@SNP_targz) if(@SNP_targz < 1);
+  @SNP_targz=reverse(@SNP_targz);        # Reverse order so that we get mostly new trees first
+  @SNP_targz=grep(/^PDS\d+/,@SNP_targz); # Keep only directories that begin with PDS
   # TODO filter trees to download, to save tons of time. Do the filtering
   # step here instead of after all trees are downloaded.
-  logmsg scalar(@SNP_dir)." trees to download";
-  for(my $i=0;$i<@SNP_dir;$i++){
+  logmsg scalar(@SNP_targz)." trees to download";
+  for(my $i=0;$i<@SNP_targz;$i++){
     if($i % 100 == 0 && $i>0){
-      logmsg "Finished downloading $i trees out of ".scalar(@SNP_dir);
+      logmsg "Finished downloading $i trees out of ".scalar(@SNP_targz);
     }
 
     # If it is already here and downloaded, then don't
     # download again.
-    my $localtree="$$settings{tempdir}/SNP_trees/$SNP_dir[$i].newick_tree.newick"; 
+    my $localtree="$$settings{tempdir}/SNP_trees/".basename($SNP_targz[$i],qw(.tar.gz)).".newick_tree.newick"; 
     next if(-e $localtree);
+    
+    # Download the tar.gz
+    my $local_targz="$$settings{tempdir}/SNP_trees/$SNP_targz[$i]";
+    $ftp->get($SNP_targz[$i],$local_targz)
+      or die "get failed", $ftp->message;
+
+    system("tar -C $$settings{tempdir}/SNP_trees -zxf $local_targz 2>/dev/null");
+    die "ERROR untarring $local_targz: $?" if($? >0 && $? != 2 && $? != 512);
+
+    die "ERROR: I could not find the newick tree at $localtree" if(!-e $localtree);
+    next;
 
     # Look for the tree file
-    my @cluster_files=$ftp->ls($SNP_dir[$i]) or die "ERROR: could not read $SNP_dir[$i]: ",$ftp->message;
+    my @cluster_files=$ftp->ls($SNP_targz[$i]) or die "ERROR: could not read $SNP_targz[$i]: ",$ftp->message;
     my $remotetree=(grep(/\.newick$/,@cluster_files))[0];
     # there should be a newick tree in each dir, but don't bother downloading
     # a null tree in case it happens.
@@ -222,7 +234,7 @@ sub downloadAll{
 
   $ftp->quit;
 
-  return scalar(@SNP_dir);
+  return scalar(@SNP_targz);
 }
 
 =over 12
