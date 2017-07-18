@@ -7,6 +7,7 @@ use File::Temp qw/tempdir/;
 use File::Basename qw/basename/;
 use Getopt::Long qw/GetOptions/;
 use List::Util qw/uniq/;
+use Bio::DB::EUtilities;
 
 local $0 = basename $0;
 sub logmsg{print STDERR "$0: @_\n";}
@@ -88,7 +89,7 @@ sub readLineList{
         logmsg "Found duplicate header $_";
       }
     }
-    die "ERROR: some headers are duplicated in $linelist";
+    logmsg "WARNING: some headers are duplicated in $linelist";
   }
   while(my $line=<$lineListFh>){
     $line=~s/^\s+|\s+$//g;
@@ -110,7 +111,15 @@ sub readLineList{
     # TODO try to use eutils to find a biosample accession if there isn't one
     # in the spreadsheet.
     if(!$index){
-      $_ //= "" for(@field);
+      $F{biosample_acc} = wgsIdToBiosample($F{WGS_id}, $settings);
+      $index = $F{biosample_acc};
+    }
+
+    # If there isn't a biosample for the hash to be
+    # index, then put out a warning and set undefined
+    # fields to empty string.
+    if(!$index){
+      $_ ||= "" for(@field);
       logmsg "WARNING: Could not find a biosample accession in the line list for @field[0..2]";
       next;
     }
@@ -143,7 +152,7 @@ sub findCloselyRelatedIsolates{
 
     # These two isolates should be kept if they are close enough
     # to each other.
-    if($F{compatible_distance} > 50){
+    if($F{compatible_distance} > 25){
       next;
     } 
     
@@ -188,6 +197,28 @@ sub printNewLineList{
 
   close $outFh;
 }
+
+# figure out the biosample accession from the WGS_id.
+sub wgsIdToBiosample{
+  my ($WGS_id, $settings) = @_;
+
+  logmsg "Using edirect to find the biosample for $WGS_id";
+  
+  my $biosample = `esearch -query '$WGS_id' -db biosample | esummary | xtract -pattern DocumentSummary -element Accession`;
+  if($?){
+    die "ERROR: could not run esearch | esummary | xtract on $WGS_id";
+  }
+  $biosample//="";
+  $biosample=~s/^\s+|\s+$//g;
+
+  if(!$biosample){
+    die "ERROR: could not extract biosample accession from WGS_id $WGS_id";
+  }
+
+  return $biosample;
+}
+
+
 
 sub usage{
   "$0: create a new line list of related isolates
