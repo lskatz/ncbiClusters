@@ -8,6 +8,7 @@ use Data::Dumper qw/Dumper/;
 $Data::Dumper::Sortkeys=sub{my($hash)=@_; return [sort {lc $a cmp lc $b} keys(%$hash)]};
 
 use Net::FTP;
+use LWP::Simple qw/getstore $ua/;
 use Time::Piece;
 
 use Exporter qw/import/;
@@ -158,15 +159,7 @@ sub downloadAll{
   #Clusters directory files
   mkdir "$$settings{tempdir}/Clusters";
   mkdir "$$settings{outdir}/Clusters";
-  #logmsg "Retrieving SNP distances";
-  #$ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
-  #  or die "Cannot change working directory ", $ftp->message;
-  #my @distfiles = $ftp->ls("*.SNP_distances.tsv");
-  #foreach(@distfiles) {
-  #  $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
-  #    or die "get failed", $ftp->message;
-  #}
-  #
+  
   # Retrieve the list of newest isolates, also in this directory
   logmsg "Retrieving a list of the latest isolates";
   $ftp->cwd("//pathogen/Results/$$settings{set}/$remoteDir/Clusters/")
@@ -174,10 +167,18 @@ sub downloadAll{
   my @newIsolateFiles=$ftp->ls("*.new_isolates.tsv")
     or die "ERROR with command while in Clusters directory: ls *.new_isolates.tsv: ", $ftp->message;
   foreach(@newIsolateFiles){
+    next if(-e "$$settings{tempdir}/Clusters/$_");
     $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
       or die "get failed", $ftp->message;
   }
   
+  logmsg "Retrieving SNP distances";
+  my @distfiles = $ftp->ls("*.SNP_distances.tsv");
+  foreach(@distfiles) {
+    next if(-e "$$settings{tempdir}/Clusters/$_");
+    $ftp->get($_,"$$settings{tempdir}/Clusters/$_")
+      or die "get failed", $ftp->message;
+  }
 
   #Retrieve SNP trees
   logmsg "Reading the remote SNP_trees directory";
@@ -200,35 +201,40 @@ sub downloadAll{
       logmsg "Finished downloading $i trees out of ".scalar(@SNP_targz);
     }
 
+    my $remoteFullPath="ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$remoteDir/SNP_trees/$SNP_targz[$i]";
+
     # If it is already here and downloaded, then don't
     # download again.
     my $localtree="$$settings{tempdir}/SNP_trees/".basename($SNP_targz[$i],qw(.tar.gz)).".newick_tree.newick"; 
     next if(-e $localtree);
     
-    # Download the tar.gz
     my $local_targz="$$settings{tempdir}/SNP_trees/$SNP_targz[$i]";
-    $ftp->get($SNP_targz[$i],$local_targz)
-      or die "get failed", $ftp->message;
+    my $numTries=0;
+    while(!-f $local_targz){
+      LWP::Simple::getstore($remoteFullPath, $local_targz);
+      if($numTries == 5){
+        logmsg "Remote path is giving trouble: $remoteFullPath";
+      }
+      if(++$numTries > 20){
+        die "ERROR: tried ". ($numTries-1). " times to download $remoteFullPath and failed";
+      }
+    }
+
+    # To make sure it downloads and flushes to the file correctly, use a file handle.
+    #open(my $localFh, ">", $local_targz) or die "ERROR: could not write to $local_targz: $!";
+    #$ftp->get($SNP_targz[$i],$localFh)
+    #  or die "get failed", $ftp->message;
+    #close $localFh;
 
     system("tar -C $$settings{tempdir}/SNP_trees -zxf $local_targz 2>/dev/null");
-    die "ERROR untarring $local_targz: $?" if($? >0 && $? != 2 && $? != 512);
+    if($?){
+      die "ERROR untarring $local_targz: $?";
+    }
+    unlink($local_targz);
 
-    die "ERROR: I could not find the newick tree at $localtree" if(!-e $localtree);
-    next;
-
-    # Look for the tree file
-    my @cluster_files=$ftp->ls($SNP_targz[$i]) or die "ERROR: could not read $SNP_targz[$i]: ",$ftp->message;
-    my $remotetree=(grep(/\.newick$/,@cluster_files))[0];
-    # there should be a newick tree in each dir, but don't bother downloading
-    # a null tree in case it happens.
-    next if(!$remotetree);
-
-    # Download the tree file.
-    $ftp->get($remotetree,$localtree)
-      or die "get failed", $ftp->message;
-
-    if($$settings{maxTrees} && $i >= $$settings{maxTrees}){
-      last;
+    # These tar archives are incorrectly compressed and so sometimes there isn't a tree
+    if(!-e $localtree){
+      die "ERROR: I could not find the newick tree at $localtree" if(!-e $localtree);
     }
   }
 

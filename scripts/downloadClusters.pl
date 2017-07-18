@@ -67,7 +67,7 @@ sub main{
 
   # Can only die on error only after the program has
   # had a chance to run listSets().
-  die "ERROR: need results set (ie, taxon) such as Listeria\n".usage($settings) if(!$$settings{set});
+  die "ERROR: need taxon such as Listeria\n".usage($settings) if(!$$settings{set});
   die "ERROR: need remote directory\n".usage($settings) if(!$$settings{remoteDir});
 
   mkdir($$settings{tempdir}) if(!-e $$settings{tempdir});
@@ -92,10 +92,11 @@ sub main{
 
   # Copies anything that passes the filters to the 
   # output directory.
-  filterTrees($metadata,$settings);
-
-  makeReport($metadata,$PDG,$settings);
-
+  my $filteredIsolates = filteredIsolates($metadata,$settings);
+  
+  printReport($filteredIsolates,$settings);
+  downloadSra($filteredIsolates, $settings);
+  
   return 0;
 }
 
@@ -173,7 +174,7 @@ sub readMetadata{
       # Figure out what I want this key to be. 
       # Preferably, the PDT identifier (target_acc)
       my $index;
-      for my $possibleIndexName(qw(NCBI_ACCESSION biosample_acc SAMN)){
+      for my $possibleIndexName(qw(target_acc NCBI_ACCESSION biosample_acc SAMN strain sample_name)){
         # Need to save this variable to avoid uninitialized value in hash within hash warning
         my $possibleIndexFromLine=$F{$possibleIndexName};
         next if(!defined($possibleIndexFromLine));
@@ -191,7 +192,7 @@ sub readMetadata{
       # TODO try to use eutils to find a biosample accession if there isn't one
       # in the spreadsheet.
       if(!$index){
-        logmsg "WARNING: Could not find a biosample accession for \n".Dumper \%F;
+        logmsg "WARNING: Could not find a biosample accession in the line list for \n".Dumper \%F;
         next;
       }
 
@@ -235,15 +236,17 @@ sub readMetadata{
   return \%metadata;
 }
 
-sub filterTrees{
+sub filteredIsolates{
   my($metadata,$settings)=@_;
 
-  logmsg "Filtering trees by time and/or by line list. If none were given, then no trees will be filtered by this process. If --new-isolates was given, we are also filtering by that!";
-
+  logmsg "Filtering by time and/or by line list. If none were given, then no trees will be filtered by this process. If --new-isolates was given, we are also filtering by that!";
+  
+  my %filteredIsolate;
+  
   # Index the list of new isolates if requested to 
   # filter by new isolates
-  my %treeWithNewIsolate;
   if($$settings{'new-isolates'}){
+  # TODO sort by the version number
     my $newisolatesFile=(glob("$$settings{tempdir}/Clusters/*.new_isolates.tsv"))[0];
     open(my $fh,"<",$newisolatesFile) or die "ERROR: cannot read $newisolatesFile: $!";
     my $header=<$fh>; chomp($header);
@@ -253,371 +256,141 @@ sub filterTrees{
       my @F=split(/\t/,$_);
       my %F;
       @F{@header}=@F;
-      $treeWithNewIsolate{$F{PDS_acc}}=\%F;
+      $filteredIsolate{$F{target_acc}}=$$metadata{$F{target_acc}};
     }
     close $fh;
   }
-
-  # Start the filtering process
-  my $numPassed=0;
-  for my $tree(glob("$$settings{tempdir}/SNP_trees/*.newick")){
-    # If the tree passes filters, then it gets moved here
-    my $outtree="$$settings{outdir}/SNP_trees/".basename($tree);
-    my $tree_passed_filters=1;  # innocent until guilty
-    my @whyFail; #Keep track of why a tree didn't pass filters for debugging
-
-    # Read in the tree and its leaves
-    my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree;
-    my @sample=$treeObj->get_leaf_nodes(); # returns node objects
-
-    # Determine whether this tree has any isolates in the 
-    # time window that the user supplied
-    my $is_in_timewindow=0; # assume false until proven true by >0 isolates
-    for my $s(@sample){
-      my $target_acc=$s->id;
-      $target_acc=~s/^\'|\'$//g; # remove single quotes that might appear around taxa in the tree
-      
-      # Read in the date to an object, assuming the date is in Y-m-d format.
-      # The best date to read is the collection date, but if not that, then
-      # the target_creation_date is a good assumption (although sometimes not
-      # accurate for DoC).
-      my $dateToRead=$$metadata{$target_acc}{collection_date};
-      $dateToRead=~s/^\s+|\s+//g; # whitespace trim so I don't have to worry about it below
-      if($dateToRead=~/^$|^missing$|^null$|^0$/i){ # regex for blank or 'missing' or 0 or 'null'
-        $dateToRead=$$metadata{$target_acc}{target_creation_date};
-      }
-      my $dateObj=parseDate($dateToRead);
-      if($dateObj >= $$settings{from} && $dateObj <= $$settings{to}){
-        $is_in_timewindow=1;
-        last;
-      }
-    }
-
-    # If it doesn't occur within the time window.
-    if($is_in_timewindow){
-      #logmsg "Tree passed: $tree";
-    } else {
-      #logmsg "Tree is not in the time window: $tree";
-      $tree_passed_filters=0;
-      push(@whyFail,"Not in time window");
-    }
-    
-    # Filter for new isolates only if requested
-    if($$settings{'new-isolates'}){
-      my $PDS_acc=basename($tree,".newick_tree.newick");
-      if($treeWithNewIsolate{$PDS_acc}){
-        
-      } else {
-        $tree_passed_filters=0;
-        push(@whyFail,"Tree does not have isolates in the new isolates list");
-      }
-    }  
-
-    # Only keep trees in the line lists, if line lists
-    # were supplied.
-    if(@{$$settings{'line-list'}} > 0){
-      
-      my $hasAnIsolateInLineList=0; # guilty-until-innocent
-      for my $s(@sample){
-        my $target_acc=$s->id;
-        $target_acc=~s/^\'|\'$//g; # remove single quotes that might appear around taxa in the tree
-        
-        # Check for anything that pulsenet would put into
-        # the metadata that NCBI wouldn't have. That will
-        # be the indication that it is in the line list.
-        # TODO: I should probably just read the line list
-        # directly.
-        if($$metadata{$target_acc}{is_in_lineList}){
-          $hasAnIsolateInLineList++;
-        }
-      }
-
-      # If not a single isolate is in the line list, then this tree fails.
-      if(!$hasAnIsolateInLineList){
-        $tree_passed_filters=0;
-        push(@whyFail,"Tree does not have isolates in the line list");
-        next;
-      }
-    }
-
-    # TODO any future filters?
-
-    # If the tree passed all filters, then copy it over
-    if($tree_passed_filters){
-      $numPassed++;
-      cp($tree,$outtree) or die "ERROR copying $tree to $tree:\n  $!";
-    } else {
-      unlink($outtree); # remove this file in case of previous results
-      #logmsg "Tree failed the filters because ".join("\n",@whyFail);
-    }
-  }
-
-  logmsg "Done filtering. $numPassed trees passed.";
-
-}
-
-sub makeReport{
-  my($metadata,$PDG,$settings)=@_;
-
-  logmsg "Making the PDF report";
   
-  my $postscript="$$settings{outdir}/report.ps";
-  my $PDF="$$settings{outdir}/report.pdf";
+  # open the cluster information but only keep recent isolates so that
+  # the memory footprint is low
+  # TODO sort by version number and get the latest.
+  my $clusterFile = (glob("$$settings{tempdir}/Clusters/*.SNP_distances.tsv"))[0];
+  open(my $clusterFh, $clusterFile) or die "ERROR: could not read $clusterFile: $!";
+  my $header=<$clusterFh>;
+  chomp($header);
+  my @header=split(/\t/,$header);
+  while(<$clusterFh>){
+    my %F;
+    @F{@header}=split(/\t/,$_);
 
-  # Figure out a coloring scheme
-  #  http://paletton.com/#uid=62X0Z0k7xFM3Ur75UujeqG4j0KZ
-  #my @colorPercentage=(0.1,0.3,0.5,0.7,0.9);
-  #my @availableColor = variations_with_repetition(\@colorPercentage,3);
-  # Sort colors brightest to darkest instead of by RGB. Randomize colors
-  # that have an equal score in the sort.
-  #@availableColor=sort { sum(map{exp($_)} @$b) <=> sum(map{exp($_)} @$a) } shuffle(@availableColor);
-  # Remove colors that are too bright
-  #@availableColor=grep{!($$_[0]>0.7 && $$_[1] >0.7 && $$_[2] > 0.7)} @availableColor;
-  #die Dumper [map{join(", ",@$_)} @availableColor];
-
-  my @availableColor=colorScheme();
-
-  # Figure out what categories the user wants to color by
-  my $colorBy=new Config::Simple("config/colorBy.ini")->get_block("global");
-  my @colorBy=keys(%$colorBy);
-  my %colorCoding;#=(''=>[0,0,0]); # holds color coding combinations defined by the config file
-  $colorCoding{Missing} = shift(@availableColor); # when there is no color, choose black
-
-  logmsg "Creating phylogeny images";
-  mkdir "$$settings{outdir}/images";
-  for my $tree(glob("$$settings{outdir}/SNP_trees/*.newick")){
-    my $PDS=basename($tree,".newick_tree.newick");
-    my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
-    my $treeObj=Bio::TreeIO->new(-file=>$tree)->next_tree; # assume only one tree in the file
-    
-    # Avoid a random divide by zero error in the cladogram module
-    if($treeObj->get_root_node->height==0){
-      #$treeObj->get_root_node->branch_length(1e-8);
-      logmsg "Skipping $tree: the root height is zero which causes errors in BioPerl.";
-      next;  # Skip; not sure what to do about this right now
-    }
-
-    # Adds colors into the tree object (and in the future, anything else).
-    addMetadataToTree($treeObj,$metadata,$colorBy,\%colorCoding,\@availableColor,$settings);
-
-    my $cladogram=Bio::Tree::Draw::Cladogram->new(
-      -tree       => $treeObj,
-      #-font       => "sans-serif",
-      -size       => 12,
-      -colors     => 1,
-      -bootstrap  => 0,  # draw bootstraps?
-      
-      # no margins
-      -top        => 0,  
-      -right      => 0,
-      -bottom     => 0,
-      -left       => 0,
-    );
-    $cladogram->print(-file=>$eps);
-  }
-
-  # Make the full report
-  my $p=new PostScript::Simple(
-    papersize   => "Letter",
-    colour      => 1,
-    eps         => 0,
-    units       => "pt",        # Must be in pt units instead of in because the tree eps files are in pt
-    #coordorigin => "LeftTop",   # coordinate origin top-left
-    #direction   => "RightDown", # direction for x-y coordinates
-  );
-
-  my $pageNumber=1;
-  $p->newpage($pageNumber);
-  $p->setcolour("black");
-  $p->setfont("Times-Roman",32);
-  $p->text({align=>"centre"},72*4,72*10,"Report from NCBI Pathogen Pipeline");
-  $p->setfont("Times-Roman",24);
-  $p->text({align=>"left"},72*0.5,72*9.5,"NCBI dataset: $$settings{set} ($$settings{remoteDir})");
-  $p->text({align=>"left"},72*0.5,72*9.0,"Filters:");
-  $p->setfont("Times-Roman",18);
-  $p->text({align=>"left"},72*0.5,72*8.5,"  from: $$settings{from}");
-  $p->text({align=>"left"},72*0.5,72*8.0,"  to: $$settings{to}");
-
-  # Add a color legend in a black box 7"x2"
-  $p->setcolour("black");
-  $p->setlinewidth(1);
-  my $wholeLegendHeight=5.5*72;
-  my $wholeLegendY1=2*72;
-  $p->box(72*0.5,$wholeLegendY1,72*7.5,$wholeLegendY1+$wholeLegendHeight);
-
-  # The height/width of each color legend box is 2". For
-  # keeping a margin, we will double the effective size
-  # and add one.
-  my $ptPerColor=($wholeLegendHeight/(1+2*scalar(keys(%colorCoding))));
-  my $legendYMarker=$wholeLegendY1; # the marker for where legend boxes are starts with the outer box
-  # Alphabetize the legend
-  for my $category(sort {$b cmp $a} keys(%colorCoding)){
-    my $color=$colorCoding{$category} or next;
-    $legendYMarker+=$ptPerColor; # adding margin
-    # Convert the decimal color used in BioPerl into the 0-255 range for PostScript::Simple.
-    $p->setcolour($$color[0]*255, $$color[1]*255, $$color[2]*255);
-    $p->box({filled=>1},
-      72*1,                       # x1
-      $legendYMarker,             # y1
-      72*1.0+$ptPerColor,         # x2
-      $legendYMarker+$ptPerColor, # y2
-    );
-
-    $p->setfont("Times-Roman",int($ptPerColor));
-    $p->setcolour("black");
-    $category||="Missing";
-    #$p->text(72*1.0+$ptPerColor*2, $legendYMarker, $category."  ". join(", ",@$color)); # To the right of the box
-    $p->text(72*1.0+$ptPerColor*2, $legendYMarker, $category); # To the right of the box
-
-    $legendYMarker+=$ptPerColor; # advance marker past the legend box
-  }
-
-  # Footer for time generaged
-  $p->setcolour("black");
-  $p->setfont("Times-Roman",16);
-  $p->text({align=>"centre"},72*4,72*1,"generated ".localtime()); 
-
-  # Make a new page per tree
-  #$p->setcolour(30,30,30);
-  logmsg "Adding phylogeny images to larger report";
-  for my $tree(glob("$$settings{outdir}/SNP_trees/*.newick")){
-    my $eps="$$settings{outdir}/images/".basename($tree,'.newick').".eps";
-    if(!-e $eps){
-      logmsg "Warning: I could not locate the eps image for $tree. I will not include this in the report.";
+    # At least one member must be in the line list
+    if(!$$metadata{$F{target_acc_1}}{'is_in_lineList'} && 
+       !$$metadata{$F{target_acc_2}}{'is_in_lineList'}
+      ){
       next;
     }
-    $p->newpage(++$pageNumber); # the PS module increments page numbers automatically starting with 1
-    #$p->{direction}="RightDown";
-    #$p->{coordorigin} = "LeftTop";   # coordinate origin bottom-left
-    $p->setfont("Times-Roman",16);
-    $p->setcolour("black");
-    #logmsg "Writing to $eps";
 
-    my $tree_acc=basename($eps,".newick_tree.eps");
-    $p->text({align=>"centre"},4*72,10.5*72,$tree_acc);
-    if($p->err()){
-      die $p->err();
-    }
-
-    # Make URL to NCBI results directory
-    $p->setfont("Times-Roman",12);
-    $p->text({align=>"left"},72*0.3,72*10,"http://www.ncbi.nlm.nih.gov/pathogens/$$settings{set}/$PDG/$tree_acc");
-    $p->text({align=>"left"},72*0.3,72*9.7,"ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$$settings{set}/$$settings{remoteDir}/SNP_trees/$tree_acc");
-
-    # Bio::Tree::Draw::Cladogram puts decimals into the width
-    # but PostScript::Simple cannot understand decimals.
-    # Therefore I have to find the bbox dimensions and write
-    # them correctly to a new temporary file, then replace
-    # the original with the temporary file.
-    my @treeCoordinates;  #x1,y1,x2,y2
-    open(my $epsFh,"<",$eps) or die "ERROR: could not read $eps: $!";
-    open(my $epsNewFh,">","$eps.tmp") or die "ERROR: could not write to $eps.tmp: $!";
-    while(my $line=<$epsFh>){
-      if ($line=~/^\%\%BoundingBox:\s+(.+)\s*$/){
-        my $dimensions=$1;
-        @treeCoordinates=split(/\s+/,$dimensions);
-        $_=int($_) for(@treeCoordinates);
-
-        print $epsNewFh '%%BoundingBox: '.join(" ",@treeCoordinates)."\n";
-      } else {
-        print $epsNewFh $line;
-      }
-    }
-    close $epsFh;
-
-    die "ERROR: could not find bbox dimensions of $eps" if(!defined($treeCoordinates[3]));
-
-    # Cement the new bbox dimensions into the file by
-    # making a move (rename) command.
-    system("mv $eps.tmp $eps");
-
-    # Set up the direction of flow to bottom to top so that the
-    # tree image doesn't get reversed and
-    # set up pt because the image is in pt units.
-    #$p->{direction}="RightUp";
-    #$p->{coordorigin} = "LeftBottom";   # coordinate origin bottom-left
-
-    # Make a 0.5 inch margin from the bottom left
-    # 72 points per inch.
-    $_=($_+=72*0.5) for(@treeCoordinates[0,2]); # shift X
-    $_=($_+=72*0.5) for(@treeCoordinates[1,3]); # shift Y
-
-    # Rescale if wider than the page or taller than the page.
-    # Dimensions inside of the margin: 7.5" x 10"
-    if($treeCoordinates[2] > 7.5*72 || $treeCoordinates[3] > 10*72){
-      my $scale=min(7.5*72/$treeCoordinates[2], 10*72/$treeCoordinates[3]);
-      $_ *= $scale for(@treeCoordinates);
-    }
-
-    $p->importepsfile($eps, @treeCoordinates);
-    if($p->err()){
-      die "ERROR with $eps:\n". $p->err();
-    }
-  }
-  $p->output($postscript);
-  logmsg "Wrote $pageNumber pages to $postscript";
-  
-  system("ps2pdf $postscript $PDF");
-  if($?){
-    logmsg "WARNING: could not use `ps2pdf` to convert $postscript to $PDF";
-  } else {
-    logmsg "Converted $postscript to $PDF";
-  }
-}
-
-sub addMetadataToTree{
-  my($treeObj,$metadata,$colorBy,$colorCoding,$availableColor,$settings)=@_;
-
-  for my $node($treeObj->get_leaf_nodes){
-    # remove leading and lagging quotes
-    my $target_acc=$node->id;
-    $target_acc=~s/^\'|\'$//g;
-    #logmsg $node->id ." -> $target_acc";
-
-    # rename the node
-    $node->id($$metadata{$target_acc}{label});
-
-    # Color by user-defined categories
-    my $color;
-    # Currently this loop only works if there is only one category in the ini file.
-    # TODO allow for more categories.
-    for my $colorKey (keys(%$colorBy)){
-      $$metadata{$target_acc}{$colorKey}||="Missing";
-      if($$metadata{$target_acc}{$colorKey} =~/^NULL$|^\s*$|^missing$/i){
-        next;
-      }
-
-      $color=$$colorCoding{ $$metadata{$target_acc}{$colorKey} };
-      if(!$color){
-        $color=shift(@$availableColor);
-        # If there still isn't a color, make one up
-        if(!$color){
-          $color=randColor();
-        }
-        $$colorCoding{ $$metadata{$target_acc}{$colorKey} } = $color;
-      }
-    }
-
-    # Translate 'null' values to 'Missing'
-    if(!$color){
-      $color=$$colorCoding{Missing};
-    }
-
-    $node->add_tag_value("Rcolor",$$color[0]);
-    $node->add_tag_value("Gcolor",$$color[1]);
-    $node->add_tag_value("Bcolor",$$color[2]);
-  }
-}
+    die Dumper \%F;
     
+    # Discard this pairwise comparison if either isolate is older than
+    # X days.
+    my $date_1 = parseDate($$metadata{$F{target_acc_1}}{target_creation_date});
+    my $date_2 = parseDate($$metadata{$F{target_acc_2}}{target_creation_date});
+    if(
+      $date_1 < $$settings{from} || $date_1 > $$settings{to} ||
+      $date_2 < $$settings{from} || $date_2 > $$settings{to}
+      ){
+      next;
+    }
+    
+    # These two isolates should be kept if they are close enough
+    # to each other.
+      if($F{compatible_distance} > 50){
+      next;
+    }  
+    
+    # Passed all filters: keep these two targets
+    $filteredIsolate{$F{target_acc_1}}=$$metadata{$F{target_acc_1}};
+    $filteredIsolate{$F{target_acc_2}}=$$metadata{$F{target_acc_2}};
+  }
+  close $clusterFh;
+  return \%filteredIsolate;
+}
+
+sub printReport{
+  my($filteredIsolates,$settings)=@_;
+  
+  my $report="$$settings{outdir}/ncbiLineList.tsv";
+  open(my $fh, ">", $report) or die "ERROR: could not write to $report: $!";
+  # Make the new line list
+  my @header=qw(label  HHS_region      LibraryLayout   PFGE_PrimaryEnzyme_pattern      PFGE_SecondaryEnzyme_pattern    Platform        Run     asm_acc asm_display_name        asm_level       asm_stats_contig_n50    asm_stats_length_bp     asm_stats_n_contig   assembly_method attribute_package       bioproject_acc  bioproject_center       bioproject_title        biosample_acc   collected_by    collection_date complete_fl     fullasm_id      geo_loc_name    host    host_disease    isolation_source     lat_lon outbreak        sample_name     scientific_name serovar species_taxid   sra_center      sra_release_date        strain  sub_species     target_acc      target_creation_date    tax-id  wgs_acc_prefix  wgs_master_acc);
+  print $fh join("\t", @header)."\n";
+  for my $isolate(keys(%$filteredIsolates)){
+    for my $h(@header){
+      print $fh $$filteredIsolates{$isolate}{$h}."\t";
+    }
+    print $fh "\n";
+  }
+  close $fh;
+}
+
+sub downloadSra{
+  my($filteredIsolates, $settings)=@_;
+  
+  my $outdir="$$settings{outdir}/sra";
+  my $tempdir="$$settings{tempdir}/sra"; 
+  mkdir $tempdir;
+  mkdir $outdir;
+
+  # option(s) for fastq-dump
+  my $deflineSeq='@$ac.$si/$ri';
+  
+  # Make a SneakerNet-style folder by adding in a SampleSheet.csv
+  my $sh = "$$settings{outdir}/sra/SampleSheet.csv";
+  open(my $shFh, ">", $sh) or die "ERROR: could not write to $sh: $!";
+  print $shFh "[Data]\n";
+  print $shFh join("\t", qw(Sample_ID Sample_Name Sample_Plate Sample_Well I7_Index_ID index I5_Index_ID index2 Sample_Project Description))."\n";
+  
+  # Download isolates and also add in samplesheet entries
+  my $isolateCounter=0;
+  while(my($name, $isolate) = each(%$filteredIsolates)){
+    if(!$$isolate{Run}){
+      logmsg "Warning: could not find SRA entry for $$isolate{label}";
+      my $emptyFile="$outdir/$$isolate{strain}.null.fastq";
+      open(my $fh, ">", $emptyFile) or die "ERROR: could not write to $emptyFile: $!";
+      close $fh;
+      system("gzip -f '$emptyFile'"); # make it compatible
+    }
+    
+    # Download into the tmp dir and then move it over.
+    # That way, we can check if the file was downloaded completely.
+    # Check if the file already exists
+    elsif(-e "$outdir/$$isolate{Run}_1.fastq.gz"){
+      logmsg "$$isolate{label} ($$isolate{Run}) was already downloaded; will not download again";
+    } else {
+      # Download into the temp dir
+      logmsg "Downloading $$isolate{label} into $$isolate{Run}";
+      
+      system("fastq-dump --gzip --accession $$isolate{Run} --outdir $tempdir --defline-seq $deflineSeq --defline-qual '+' --split-files --skip-technical --dumpbase --clip");
+      if($?){
+  die "ERROR: could not download $$isolate{label} using SRA ID $$isolate{Run}";
+      }
+      for(glob("$tempdir/*")){
+  mv($_, $outdir);
+      }
+    }
+    
+    my $scientificName=$$isolate{scientific_name};
+    $scientificName=~s/\s+/_/g;
+    print $shFh join("\t", $$isolate{Run}, ($$isolate{isolate_name} || $$isolate{strain} || 'strain'),
+                           "DownloadNcbiClustersScript", 
+         ++$isolateCounter, 'fake_index_id', 'fake_index',
+         'fake_index_id', 'fake_index', 'fake_project', 
+         "Species=$scientificName;Route=CalcEngine");
+    print $shFh "\n";
+  }
+  
+  close $shFh;
+}
+
 sub usage{
   my($settings)=@_;
   my $to=$$settings{to}->strftime("%m/%d/%Y");
   my $from=$$settings{from}->strftime("%m/%d/%Y");
   "$0: downloads NCBI Pathogen Detection Pipeline results
-  Usage: $0 resultsSet remoteDir
+  Usage: $0 taxon remoteDir
     where 'remoteDir' is the Pathogen Detection Pipeline 
     directory from which to retrieve results
-    and 'resultsSet' is the taxon to download, e.g., Listeria
 
   --tempdir     /tmp        Where temporary files go including
                             trees, metadata, etc. Useful for
@@ -625,10 +398,10 @@ sub usage{
                             and downloading only once.
   --outdir      ./out       Where output files go
   --list                    List the options for results sets, 
-                            i.e., taxa.
-                            If a taxon/resultsSet parameter
-                            is already given, then it will list
-                            all possible remoteDirs.
+                            i.e., taxa, and then exit.
+                            If a taxon parameter is already 
+                            given, then it will list all 
+                            possible remoteDirs.
 
   FILTERING
   --line-list   ''          A tab-delimited spreadsheet of a
