@@ -24,7 +24,12 @@ sub main{
 
   # TODO sort by version number to get the latest file
   my $metadataFile=(glob("$$settings{indir}/pathogen/Results/$$settings{taxon}/latest_snps/Metadata/*.metadata.tsv"))[0];
+  die "ERROR: could not locate metadata file in $$settings{indir}/pathogen/Results/$$settings{taxon}/latest_snps/Metadata/*.metadata.tsv" if(!$metadataFile);
+  die "ERROR: metadata file not found ($metadataFile)" if(!-e $metadataFile);
   my $clusterFile =(glob("$$settings{indir}/pathogen/Results/$$settings{taxon}/latest_snps/Clusters/*.SNP_distances.tsv"))[0];
+  die "ERROR: could not locate cluster file in $$settings{indir}/pathogen/Results/$$settings{taxon}/latest_snps/Clusters/*.SNP_distances.tsv" if(!$clusterFile);
+  die "ERROR: cluster file not found ($clusterFile)" if(!-e $clusterFile);
+
 
   my $pnIsolates=readLineList($$settings{linelist}, $settings);
   my $metadata=readMetadata($metadataFile,$settings);
@@ -94,11 +99,15 @@ sub readLineList{
   while(my $line=<$lineListFh>){
     $line=~s/^\s+|\s+$//g;
     my @field=split(/\t/,$line);
+
+    # Set %F carefully in an if-defined method
     my %F;
-    @F{@header}=@field;
+    for(my $i=0;$i<@header;$i++){
+      $F{$header[$i]}||=$field[$i]||"";
+    }
 
     # Figure out what I want this key to be. 
-    # Preferably, the PDT identifier (target_acc)
+    # Preferably, the BioSample accession
     my $index;
     for my $possibleIndexName(qw(NCBI_ACCESSION biosample_acc SAMN)){
         # Need to save this variable to avoid uninitialized value in hash within hash warning
@@ -124,7 +133,10 @@ sub readLineList{
       next;
     }
 
-    $isolate{$index}=\%F;
+    # Copy over values carefully by checking if they are defined
+    for my $key(keys(%F)){
+      $isolate{$index}{$key} ||= $F{$key};
+    }
   }
   close $lineListFh;
   return \%isolate;
