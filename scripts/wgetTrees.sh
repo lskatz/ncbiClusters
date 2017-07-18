@@ -16,6 +16,6 @@ cd $OUT
 wget --continue -r \
   -X/pathogen/Results/$TAXON/latest_snps/SNP_trees \
   -X/pathogen/Results/$TAXON/latest_snps/Trees \
-  ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$TAXON/latest_kmer/
+  ftp://ftp.ncbi.nlm.nih.gov/pathogen/Results/$TAXON/latest_snps/
 
 echo "Results can be found in $OUT"
