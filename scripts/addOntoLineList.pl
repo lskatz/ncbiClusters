@@ -9,7 +9,7 @@ use Getopt::Long qw/GetOptions/;
 use List::Util qw/uniq/;
 use Bio::DB::EUtilities;
 
-my $VERSION=0.1;
+my $VERSION=0.4;
 
 local $0 = basename $0;
 sub logmsg{print STDERR "$0: @_\n";}
