@@ -9,6 +9,8 @@ use Getopt::Long qw/GetOptions/;
 use List::Util qw/uniq/;
 use Bio::DB::EUtilities;
 
+my $VERSION=0.1;
+
 local $0 = basename $0;
 sub logmsg{print STDERR "$0: @_\n";}
 
@@ -16,8 +18,12 @@ exit main();
 
 sub main{
   my $settings={};
-  GetOptions($settings, qw(help taxon=s out|output|outfile=s linelist=s indir|input|in=s)) or die $!;
+  GetOptions($settings, qw(help version taxon=s out|output|outfile=s linelist=s indir|input|in=s)) or die $!;
   die usage() if($$settings{help});
+  if($$settings{version}){
+    print "NcbiClusters $VERSION\n";
+    return 0;
+  }
   for (qw(linelist out indir taxon)){
     $$settings{$_} //= die "ERROR: need --$_";
   }
@@ -83,7 +89,9 @@ sub readLineList{
 
   open(my $lineListFh, "<", $linelist) or die "ERROR: could not read $linelist: $!";
   # Grab the header and turn it into an array
-  my $header=<$lineListFh>; chomp($header);
+  my $header=<$lineListFh>; 
+  chomp($header);
+  $header=lc($header);
   $header=~s/^\s+|^#|\s+$//g;  # trim whitespace and leading hash
   my @header=split(/\t/,$header);
   # Some spreadsheet quality control
@@ -105,6 +113,8 @@ sub readLineList{
     for(my $i=0;$i<@header;$i++){
       $F{$header[$i]}||=$field[$i]||"";
     }
+    # WGS_id can also be found under 'WGS ID'
+    $F{'wgs_id'}//=$F{'wgs id'};
 
     # Figure out what I want this key to be. 
     # Preferably, the BioSample accession
@@ -120,7 +130,7 @@ sub readLineList{
     # TODO try to use eutils to find a biosample accession if there isn't one
     # in the spreadsheet.
     if(!$index){
-      $F{biosample_acc} = wgsIdToBiosample($F{WGS_id}, $settings);
+      $F{biosample_acc} = wgsIdToBiosample($F{wgs_id}, $settings);
       $index = $F{biosample_acc};
     }
 
@@ -214,6 +224,8 @@ sub printNewLineList{
 sub wgsIdToBiosample{
   my ($WGS_id, $settings) = @_;
 
+  die "ERROR: WGS_id is undefined" if(!$WGS_id);
+
   logmsg "Using edirect to find the biosample for $WGS_id";
   
   my $biosample = `esearch -query '$WGS_id' -db biosample | esummary | xtract -pattern DocumentSummary -element Accession`;
@@ -241,5 +253,6 @@ sub usage{
   --linelist    From PulseNet.  Must have biosample_acc as a header
   --out         The new line list.
   --taxon       The taxon as listed in the NCBI FTP site
+  --version     Print the version and exit
   "
 }
