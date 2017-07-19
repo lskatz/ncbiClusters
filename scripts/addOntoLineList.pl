@@ -129,7 +129,8 @@ sub readLineList{
     }
     # TODO try to use eutils to find a biosample accession if there isn't one
     # in the spreadsheet.
-    if(!$index){
+    if(!$index && $F{wgs_id}){
+
       $F{biosample_acc} = wgsIdToBiosample($F{wgs_id}, $settings);
       $index = $F{biosample_acc};
     }
@@ -138,8 +139,11 @@ sub readLineList{
     # index, then put out a warning and set undefined
     # fields to empty string.
     if(!$index){
-      $_ ||= "" for(@field);
-      logmsg "WARNING: Could not find a biosample accession in the line list for @field[0..2]";
+      for(my $i=0;$i<@header;$i++){
+        $field[$i] ||= "";
+      }
+      my $tmpId=join(", ",@field[0..2])."...";
+      logmsg "WARNING: Could not find a biosample accession in the line list, line $. ($tmpId)";
       next;
     }
 
@@ -224,8 +228,6 @@ sub printNewLineList{
 sub wgsIdToBiosample{
   my ($WGS_id, $settings) = @_;
 
-  die "ERROR: WGS_id is undefined" if(!$WGS_id);
-
   logmsg "Using edirect to find the biosample for $WGS_id";
   
   my $biosample = `esearch -query '$WGS_id' -db biosample | esummary | xtract -pattern DocumentSummary -element Accession`;
@@ -238,6 +240,7 @@ sub wgsIdToBiosample{
   if(!$biosample){
     die "ERROR: could not extract biosample accession from WGS_id $WGS_id";
   }
+  logmsg " " x 40 . $biosample;
 
   return $biosample;
 }
