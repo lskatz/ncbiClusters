@@ -8,6 +8,9 @@ use File::Basename qw/basename/;
 use Getopt::Long qw/GetOptions/;
 use List::Util qw/uniq/;
 use Bio::DB::EUtilities;
+use FindBin qw/$RealBin/;
+
+use lib "$RealBin/../lib/perl5";
 
 my $VERSION=0.4;
 
@@ -18,7 +21,7 @@ exit main();
 
 sub main{
   my $settings={};
-  GetOptions($settings, qw(help version taxon=s out|output|outfile=s linelist=s indir|input|in=s)) or die $!;
+  GetOptions($settings, qw(help version taxon=s download-runs out|output|outfile=s linelist=s indir|input|in=s)) or die $!;
   die usage() if($$settings{help});
   if($$settings{version}){
     print "NcbiClusters $VERSION\n";
@@ -106,6 +109,7 @@ sub readLineList{
   }
   while(my $line=<$lineListFh>){
     $line=~s/^\s+|\s+$//g;
+    next if(!$line);
     my @field=split(/\t/,$line);
 
     # Set %F carefully in an if-defined method
@@ -178,10 +182,11 @@ sub findCloselyRelatedIsolates{
 
     # These two isolates should be kept if they are close enough
     # to each other.
-    if($F{compatible_distance} > 25){
+    if($F{compatible_distance} > 50){
       next;
     } 
     
+    logmsg "$F{biosample_acc_1} and $F{biosample_acc_2} are $F{compatible_distance} compatible distance of each other. Saving.";
     # Passed all filters: keep these two targets
     push(@filteredIsolate, $F{biosample_acc_1}, $F{biosample_acc_2});
   }
@@ -238,7 +243,7 @@ sub wgsIdToBiosample{
   $biosample=~s/^\s+|\s+$//g;
 
   if(!$biosample){
-    die "ERROR: could not extract biosample accession from WGS_id $WGS_id";
+    logmsg "WARNING: could not extract biosample accession using esearch and WGS_id $WGS_id";
   }
   logmsg " " x 40 . $biosample;
 
@@ -251,11 +256,15 @@ sub usage{
   "$0: create a new line list of related isolates
   Usage: $0 --linelist in.tsv --indir ./ftp.ncbi.nlm.nih.gov/ --out newlinelist.tsv
 
-  --indir       The input directory from NCBI. Is a mirror 
-                of the original directory structure.
-  --linelist    From PulseNet.  Must have biosample_acc as a header
-  --out         The new line list.
-  --taxon       The taxon as listed in the NCBI FTP site
-  --version     Print the version and exit
+  --indir          The input directory from NCBI. Is a mirror 
+                   of the original directory structure.
+  --linelist       From PulseNet.  Must have biosample_acc
+                   as a header
+  --out            The new line list.
+  --taxon          The taxon as listed in the NCBI FTP site
+  --version        Print the version and exit
+  --download-runs  Download each SRA entry into a
+                   SneakerNet directory
   "
 }
+

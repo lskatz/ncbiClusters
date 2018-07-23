@@ -86,3 +86,69 @@ C<EXE_FILES: >
 
 =back
 
+=head2 Wed Sep  6 11:08:28 2017: C<Module> L<Text::CSV|Text::CSV>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/edlb-sneakernet/bin/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.95>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Wed Sep  6 11:08:34 2017: C<Module> L<Bio::ASN1::EntrezGene|Bio::ASN1::EntrezGene>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/edlb-sneakernet/bin/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.72>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Wed Sep  6 11:10:39 2017: C<Module> L<Bio::EUtilities|Bio::EUtilities>
+
+=over 4
+
+=item *
+
+C<installed into: /scicomp/home/edlb-sneakernet/bin/ncbiClusters/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.75>
+
+=item *
+
+C<EXE_FILES: bin/bp_einfo bin/bp_genbank_ref_extractor>
+
+=back
+
